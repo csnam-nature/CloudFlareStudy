@@ -1,0 +1,24 @@
+{
+  "name": "url-shortener",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Workers + KV + D1 로 만드는 URL 단축기 (학습용 미니 프로젝트 1)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "db:migrate:local": "wrangler d1 migrations apply url-shortener-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply url-shortener-db --remote",
+    "postinstall": "wrangler types",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/smoke-test.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.13.22"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "wrangler": "^4.168.0"
+  }
+}
