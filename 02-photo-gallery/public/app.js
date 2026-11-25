@@ -192,8 +192,11 @@ $("albumDelete").addEventListener("click", async () => {
 // ─────────────────────────────────────────────────────────────
 // 사진 목록 (커서 페이지 나눔)
 // ─────────────────────────────────────────────────────────────
+let listSeq = 0; // 목록 요청 번호: 앨범·검색이 바뀌면 이전 요청의 응답은 버립니다.
 async function loadPhotos(reset = false) {
-  if (state.loading) return;
+  // "더 보기"는 진행 중인 요청이 있으면 무시하고, 필터 변경(reset)은 항상 새로 요청합니다.
+  if (state.loading && !reset) return;
+  const seq = ++listSeq;
   state.loading = true;
   if (reset) {
     state.photos = [];
@@ -205,6 +208,7 @@ async function loadPhotos(reset = false) {
   if (state.nextCursor) params.set("cursor", state.nextCursor);
   try {
     const data = await api(`/api/photos?${params}`);
+    if (seq !== listSeq) return; // 그 사이 필터가 바뀜 → 오래된 응답은 버림
     state.photos.push(...data.photos);
     state.nextCursor = data.nextCursor;
     renderGrid();
@@ -212,9 +216,9 @@ async function loadPhotos(reset = false) {
     if (state.photos.length === 0) setStatus(state.q ? EMPTY[0] : EMPTY[1]);
     else if (EMPTY.includes($("status").textContent)) setStatus("");
   } catch (e) {
-    setStatus(e.message);
+    if (seq === listSeq) setStatus(e.message);
   } finally {
-    state.loading = false;
+    if (seq === listSeq) state.loading = false;
   }
 }
 
@@ -318,7 +322,9 @@ $("editForm").addEventListener("submit", async (e) => {
       method: "PATCH",
       json: { title: f.title.value, albumId: f.albumId.value ? Number(f.albumId.value) : null, takenAt: fromLocalInput(f.takenAt.value) },
     });
-    state.photos[state.viewer] = updated;
+    // 저장 중에 다른 사진으로 넘겼을 수 있으므로 인덱스가 아니라 id 로 찾아 바꿉니다.
+    const idx = state.photos.findIndex((x) => x.id === p.id);
+    if (idx >= 0) state.photos[idx] = updated;
     renderViewer();
     renderGrid();
     $("editMsg").textContent = "저장했습니다.";
@@ -333,12 +339,17 @@ $("deletePhoto").addEventListener("click", async () => {
   if (!confirm(`"${p.title ?? p.filename}" 사진을 지울까요?\nR2 의 원본과 썸네일도 함께 지워지며 되돌릴 수 없습니다.`)) return;
   try {
     await api(`/api/photos/${p.id}`, { method: "DELETE" });
-    state.photos.splice(state.viewer, 1);
+    // 삭제 중에 다른 사진으로 넘겼을 수 있으므로 id 로 찾아 지우고, 보고 있던 사진은 그대로 둡니다.
+    const idx = state.photos.findIndex((x) => x.id === p.id);
+    if (idx >= 0) {
+      state.photos.splice(idx, 1);
+      if (state.viewer > idx) state.viewer--;
+    }
     renderGrid();
     if (state.photos.length === 0) viewer.close();
     else {
       state.viewer = Math.min(state.viewer, state.photos.length - 1);
-      renderViewer();
+      if (viewer.open) renderViewer();
     }
     setStatus("사진을 지웠습니다.");
     await loadAlbums();
