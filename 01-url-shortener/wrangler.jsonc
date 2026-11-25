@@ -15,7 +15,7 @@
   // 배포 전에 `npx wrangler kv namespace create LINKS` 로 만든 id 로 바꾸세요.
   // 로컬(wrangler dev)에서는 id 값과 상관없이 .wrangler/state 에 에뮬레이션됩니다.
   "kv_namespaces": [
-    { "binding": "LINKS", "id": "00000000000000000000000000000000" }
+    { "binding": "LINKS", "id": "21b2aee0f5514702b0c6ca9c61d488ea" }
   ],
 
   // ── D1 (서버리스 SQLite) ───────────────────────────────────
@@ -25,7 +25,7 @@
     {
       "binding": "DB",
       "database_name": "url-shortener-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "7700c1fa-b2ad-4de9-b848-05ffa8e47921",
       "migrations_dir": "migrations"
     }
   ],
