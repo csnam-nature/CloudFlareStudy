@@ -78,6 +78,14 @@ function mockEmbed(text: string): number[] {
 }
 
 // ── 3. 벡터 저장·검색 (Vectorize) ─────────────────────────────
+//
+// 로컬 `npm run dev` 와 배포본은 D1 은 따로 쓰지만 Vectorize 인덱스는 같은 원격 인덱스를 씁니다.
+// 둘 다 "1:0" 같은 청크 id 를 만들 수 있으므로, Vectorize 에는 "<네임스페이스>:<청크id>" 로 넣고
+// 검색도 같은 네임스페이스 안에서만 합니다(배포본 prod, 로컬 dev). 그래야 로컬 시험이 배포본 벡터를 덮어쓰거나 지우지 않습니다.
+
+const ns = (env: Bindings) => env.VECTOR_NAMESPACE || "prod";
+const toVecId = (env: Bindings, chunkId: string) => `${ns(env)}:${chunkId}`;
+const fromVecId = (env: Bindings, vecId: string) => vecId.slice(ns(env).length + 1);
 
 export type VectorItem = { id: string; docId: number; values: number[] };
 export type VectorMatch = { id: string; score: number };
@@ -93,7 +101,12 @@ export async function upsertVectors(env: Bindings, items: VectorItem[]) {
   // 메타데이터 docId 는 "특정 문서만 검색" 필터에 씁니다. 메타데이터 인덱스를 string 으로 만들었으므로 문자열로 넣습니다.
   for (let i = 0; i < items.length; i += 100)
     await env.VECTORS!.upsert(
-      items.slice(i, i + 100).map((x) => ({ id: x.id, values: x.values, metadata: { docId: String(x.docId) } })),
+      items.slice(i, i + 100).map((x) => ({
+        id: toVecId(env, x.id),
+        namespace: ns(env),
+        values: x.values,
+        metadata: { docId: String(x.docId) },
+      })),
     );
 }
 
@@ -115,9 +128,10 @@ export async function queryVectors(env: Bindings, values: number[], topK: number
   }
   const res = await env.VECTORS!.query(values, {
     topK,
+    namespace: ns(env),
     ...(docId ? { filter: { docId: String(docId) } } : {}),
   });
-  return res.matches.map((m) => ({ id: m.id, score: m.score }));
+  return res.matches.map((m) => ({ id: fromVecId(env, m.id), score: m.score }));
 }
 
 /** 벡터를 지웁니다(문서 삭제·다시 색인 때). */
@@ -130,7 +144,8 @@ export async function deleteVectors(env: Bindings, ids: string[]) {
     }
     return;
   }
-  for (let i = 0; i < ids.length; i += 100) await env.VECTORS!.deleteByIds(ids.slice(i, i + 100));
+  const vecIds = ids.map((id) => toVecId(env, id));
+  for (let i = 0; i < vecIds.length; i += 100) await env.VECTORS!.deleteByIds(vecIds.slice(i, i + 100));
 }
 
 // ── 4. 답변 생성 (스트리밍) ───────────────────────────────────

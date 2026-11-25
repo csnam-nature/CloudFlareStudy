@@ -121,7 +121,7 @@ npm run dev                              # AI·Vectorize 는 원격(실제 계�
 ```
 
 - 시작할 때 "여러 환경이 있으니 --env 를 지정하라"는 경고가 나와도 맨 위(기본) 설정이 쓰이니 괜찮습니다.
-- 로컬에서 올린 문서도 **실제 Vectorize 인덱스**에 벡터가 들어갑니다. 로컬 D1 과 원격 인덱스가 어긋나지 않도록, 시험이 끝나면 화면에서 문서를 삭제해 정리하세요.
+- 로컬에서 올린 문서도 **실제 Vectorize 인덱스**에 벡터가 들어갑니다. 대신 `.dev.vars` 의 `VECTOR_NAMESPACE=dev` 덕분에 벡터 id 와 검색 범위가 배포본(`prod`)과 나뉘어, 로컬 시험이 배포본 벡터를 덮어쓰거나 지우지 않습니다. 저장 한도는 함께 쓰므로 시험이 끝나면 화면에서 문서를 삭제해 정리하세요.
 - Vectorize 는 최종 일관성이라 색인 직후 몇 초 동안은 검색에 안 잡힐 수 있습니다.
 
 ### 3) 배포 (직접 할 때만)
@@ -140,6 +140,7 @@ npm run deploy                           # https://doc-chatbot.<계정>.workers.
 | --- | --- | --- |
 | `CHAT_MODEL` | `@cf/google/gemma-3-12b-it` | 답변 모델. [모델 목록](https://developers.cloudflare.com/workers-ai/models/)에서 한국어가 되는 다른 텍스트 생성 모델로 바꿔 보세요. |
 | `EMBED_MODEL` | `@cf/baai/bge-m3` | 다국어 임베딩(1024차원). 바꾸면 Vectorize 인덱스를 그 차원으로 다시 만들고 모든 문서를 다시 색인해야 합니다. |
+| `VECTOR_NAMESPACE` | `prod` (로컬은 `.dev.vars` 의 `dev`) | 같은 Vectorize 인덱스를 로컬과 배포본이 나눠 쓰기 위한 [네임스페이스](https://developers.cloudflare.com/vectorize/reference/metadata-filtering/#namespace-versus-metadata-filtering) |
 | `AI_GATEWAY_ID` | `doc-chatbot` | AI Gateway 이름. 비우면 게이트웨이 없이 호출 |
 | `MAX_UPLOAD_MB` | `10` | 업로드 크기 한도 |
 | `MAX_CHUNKS_PER_DOC` | `400` | 문서 하나의 청크 한도 (Vectorize 무료 한도 보호) |

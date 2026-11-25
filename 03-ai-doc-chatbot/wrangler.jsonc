@@ -78,6 +78,9 @@
   // 비밀이 아닌 설정값. 비밀 값(ADMIN_TOKEN)은 .dev.vars / `wrangler secret put`.
   "vars": {
     "MOCK_AI": "0",
+    // Vectorize 네임스페이스. 로컬 dev 와 배포본이 같은 원격 인덱스를 쓰므로, 벡터 id 앞에 붙이고 검색 범위도 나눕니다.
+    // 배포본은 "prod", 로컬은 .dev.vars 의 VECTOR_NAMESPACE=dev 가 이 값을 덮어씁니다.
+    "VECTOR_NAMESPACE": "prod",
     // AI Gateway 이름. 대시보드 AI > AI Gateway 에서 같은 이름으로 만드세요. 비워 두면 게이트웨이 없이 호출합니다.
     "AI_GATEWAY_ID": "doc-chatbot",
     // 답변 모델과 임베딩 모델. 임베딩 모델을 바꾸면 Vectorize 인덱스 차원(1024)도 맞춰 다시 만들어야 합니다.
@@ -110,6 +113,7 @@
       "ratelimits": [{ "name": "CHAT_LIMITER", "namespace_id": "3001", "simple": { "limit": 10, "period": 60 } }],
       "vars": {
         "MOCK_AI": "1",
+        "VECTOR_NAMESPACE": "mock",
         "AI_GATEWAY_ID": "",
         "CHAT_MODEL": "mock",
         "EMBED_MODEL": "mock",

@@ -10,12 +10,12 @@
 //
 //   브라우저 → 서버  { type: "ask", text, docId? }   질문
 //                    { type: "reset" }               새 대화
-//   서버 → 브라우저  { type: "history", messages }   연결 직후 지난 대화
+//   서버 → 브라우저  { type: "history", messages, activeId }  지난 대화 (activeId = 생성 중인 답변)
 //                    { type: "user", message }       (내가 보낸) 질문 확인
 //                    { type: "start", id }           답변 시작
 //                    { type: "sources", id, sources } 찾은 근거
 //                    { type: "delta", id, text }      답변 조각
-//                    { type: "done", id }             답변 끝
+//                    { type: "done", id, content, sources }  답변 끝(완성본)
 //                    { type: "error", message }
 
 import { Agent, type Connection, type ConnectionContext, type WSMessage } from "agents";
@@ -38,6 +38,8 @@ const KEEP_MESSAGES = 200; // 인스턴스에 보관할 최대 메시지 수
 
 export class ChatAgent extends Agent<Bindings> {
   private busy = false;
+  /** 지금 만들고 있는 답변. 생성 중에 새로 연결한 탭(또는 재연결)에도 이어서 보여 주려고 메모리에 둡니다. */
+  private current: { id: number; content: string; sources: ReturnType<typeof shorten>[] } | null = null;
 
   onStart() {
     this.sql`CREATE TABLE IF NOT EXISTS messages (
@@ -59,7 +61,12 @@ export class ChatAgent extends Agent<Bindings> {
     const ip = ctx.request.headers.get("cf-connecting-ip") ?? "local";
     connection.setState({ ip });
     const rows = this.sql<StoredMessage>`SELECT * FROM messages ORDER BY id DESC LIMIT 50`.reverse();
-    connection.send(JSON.stringify({ type: "history", messages: rows.map(toClient) }));
+    const cur = this.current;
+    // 생성 중인 답변은 DB 에 아직 빈 내용이므로, 메모리의 현재까지 내용으로 바꿔 보냅니다.
+    const messages = rows.map((m) =>
+      cur && m.id === cur.id ? { ...toClient(m), content: cur.content, sources: cur.sources } : toClient(m),
+    );
+    connection.send(JSON.stringify({ type: "history", messages, activeId: cur?.id ?? null }));
   }
 
   async onMessage(connection: Connection, raw: WSMessage) {
@@ -118,6 +125,7 @@ export class ChatAgent extends Agent<Bindings> {
     const mock = isMock(this.env);
     const sources = await retrieve(this.env, question, mock, docId);
     const shortSources = sources.map(shorten);
+    this.current = { id, content: "", sources: shortSources };
     this.broadcast(JSON.stringify({ type: "sources", id, sources: shortSources }));
 
     // 2) 생성 (스트리밍)
@@ -125,15 +133,18 @@ export class ChatAgent extends Agent<Bindings> {
     try {
       for await (const piece of streamChat(this.env, buildMessages(question, sources, history), mockAnswer(question, sources))) {
         content += piece;
+        this.current.content = content;
         this.broadcast(JSON.stringify({ type: "delta", id, text: piece }));
       }
     } finally {
+      this.current = null;
       // 중간에 실패해도 받은 데까지는 저장합니다.
       this.sql`UPDATE messages SET content = ${content || "(답변을 만들지 못했습니다)"}, sources = ${JSON.stringify(shortSources)}
         WHERE id = ${id}`;
       this.sql`DELETE FROM messages WHERE id <= (SELECT MAX(id) FROM messages) - ${KEEP_MESSAGES}`;
     }
-    this.broadcast(JSON.stringify({ type: "done", id }));
+    // 끝날 때 전체 내용도 함께 보내, 중간 조각을 놓친 화면도 완성된 답을 그릴 수 있게 합니다.
+    this.broadcast(JSON.stringify({ type: "done", id, content, sources: shortSources }));
   }
 
   private sendError(connection: Connection, message: string) {

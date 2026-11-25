@@ -6,7 +6,7 @@
 // samples/charger-error-codes.md 를 올려 색인을 기다린 뒤, WebSocket 으로 질문 → 근거·답변 확인 →
 // 이름 수정 → 다시 색인 → 삭제까지 확인하고, 만든 데이터는 마지막에 모두 지웁니다.
 // Node.js 22 이상(내장 WebSocket)이 필요합니다.
-// 한 번에 질문을 3번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 4번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
+// 한 번에 질문을 4번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 3번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
 
 import { readFile } from "node:fs/promises";
 
@@ -118,6 +118,33 @@ check("문서를 골라 질문(docId 필터)", a2.done && a2.sources?.every((s) 
 check("두 번째 연결엔 이전 대화 기록(질문+답변 2개)", a2.history?.length === 2, `${a2.history?.length}개`);
 const h = await history(session);
 check("기록에 근거도 저장됨", h.length === 4 && h[1].sources.length > 0);
+
+// 4-1. 답변 생성 중에 다른 탭이 연결해도 이어서 받음 (재연결 대비)
+{
+  const url = `${BASE.replace(/^http/, "ws")}/agents/chat-agent/${session}`;
+  const result = await new Promise((resolve, reject) => {
+    const a = new WebSocket(url);
+    let b;
+    const timer = setTimeout(() => reject(new Error("시간 초과")), 30000);
+    a.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      if (m.type === "history") a.send(JSON.stringify({ type: "ask", text: "E-23 비상 정지 해제 방법" }));
+      if (m.type === "delta" && !b) {
+        // 첫 조각을 받은 뒤 두 번째 연결을 엽니다.
+        b = new WebSocket(url);
+        const got = { history: null, done: null };
+        b.onmessage = (ev) => {
+          const x = JSON.parse(ev.data);
+          if (x.type === "history") got.history = x;
+          if (x.type === "done") (got.done = x), clearTimeout(timer), a.close(), b.close(), resolve(got);
+        };
+      }
+    };
+  });
+  const active = result.history?.messages.find((m) => m.id === result.history.activeId);
+  check("생성 중 연결하면 activeId 와 지금까지의 답변을 받음", !!active && active.content.length > 0, `activeId=${result.history?.activeId}`);
+  check("done 에 완성된 답변이 들어 있음", result.done?.content.includes("E-23"));
+}
 
 // 5. 이름 수정 → 근거 표시 이름에 반영
 let res = await fetch(`${BASE}/api/documents/${doc.id}`, {

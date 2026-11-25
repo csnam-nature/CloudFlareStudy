@@ -73,10 +73,12 @@ function handle(m) {
       answers.clear();
       for (const msg of m.messages) {
         if (msg.role === "user") addUser(msg.content);
+        // 생성 중인 답변(activeId)은 지금까지의 내용으로 그리고, 이어지는 delta 를 받습니다.
+        else if (msg.id === m.activeId) addAnswer(msg.id, msg.content, msg.sources, true);
         else if (msg.content) addAnswer(msg.id, msg.content, msg.sources, false);
       }
       if (!m.messages.length) showEmpty();
-      setAnswering(false);
+      setAnswering(m.activeId != null);
       scrollDown(true);
       break;
     case "user":
@@ -99,7 +101,8 @@ function handle(m) {
     }
     case "done": {
       const a = answers.get(m.id);
-      if (a) renderAnswer(a, false);
+      if (!a) addAnswer(m.id, m.content, m.sources, false);
+      else (a.content = m.content), (a.sources = m.sources), renderAnswer(a, false);
       setAnswering(false);
       break;
     }

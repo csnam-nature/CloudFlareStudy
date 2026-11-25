@@ -1,3 +1,5 @@
 # 로컬 개발용 비밀 값. 이 파일을 .dev.vars 로 복사해서 쓰세요. (.dev.vars 는 git 에 올라가지 않습니다)
 # PowerShell: Copy-Item .dev.vars.example .dev.vars
 ADMIN_TOKEN=local-admin-token
+# 로컬 dev 가 올린 벡터를 배포본(prod)과 섞지 않기 위한 Vectorize 네임스페이스 (wrangler.jsonc 의 vars 를 덮어씀)
+VECTOR_NAMESPACE=dev
