@@ -5,6 +5,7 @@
 //   POST   /api/links           단축 링크 생성        → D1 에 메타데이터, KV 에 코드→URL
 //   GET    /api/links           최근 링크 목록 + 클릭 수 (D1)
 //   GET    /api/stats/:code     클릭 통계 (D1 GROUP BY)
+//   PATCH  /api/links/:code     링크 수정: 원래 URL·제목 (ADMIN_TOKEN 필요)
 //   DELETE /api/links/:code     링크 삭제 (ADMIN_TOKEN 필요)
 //   GET    /:code               302 리다이렉트 (KV 조회) + 클릭 로그 기록 (waitUntil)
 //
@@ -158,13 +159,59 @@ app.get("/api/stats/:code", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// 4) 링크 삭제 (관리자 전용)
+// 4) 링크 수정·삭제 (관리자 전용)
 // ─────────────────────────────────────────────────────────────
-app.delete("/api/links/:code", async (c) => {
+
+/** Authorization: Bearer <ADMIN_TOKEN> 헤더가 맞는지 확인합니다. 토큰이 설정되지 않았으면 항상 거부. */
+function isAdmin(c: { env: Bindings; req: { header(name: string): string | undefined } }): boolean {
   const token = c.env.ADMIN_TOKEN;
-  if (!token || c.req.header("authorization") !== `Bearer ${token}`) {
-    return c.json({ error: "권한이 없습니다." }, 401);
+  return !!token && c.req.header("authorization") === `Bearer ${token}`;
+}
+
+// 원래 URL 과 제목을 바꿉니다. (코드 자체는 바꾸지 않습니다: 이미 퍼진 단축 URL 이 깨지므로)
+app.patch("/api/links/:code", async (c) => {
+  if (!isAdmin(c)) return c.json({ error: "권한이 없습니다. 관리자 토큰을 확인하세요." }, 401);
+  const code = c.req.param("code");
+
+  let body: { url?: string; title?: string | null };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "JSON 본문이 필요합니다." }, 400);
   }
+
+  const current = await c.env.DB.prepare("SELECT url, title, expires_at FROM links WHERE code = ?1")
+    .bind(code)
+    .first<{ url: string; title: string | null; expires_at: number | null }>();
+  if (!current) return c.json({ error: "링크를 찾을 수 없습니다." }, 404);
+
+  let url = current.url;
+  if (body.url !== undefined) {
+    const normalized = normalizeUrl(body.url);
+    if (!normalized) return c.json({ error: "http(s) URL 을 입력하세요." }, 400);
+    url = normalized;
+  }
+  // 빈 문자열이나 null 을 보내면 제목을 지웁니다.
+  const title = body.title === undefined ? current.title : body.title ? body.title.slice(0, 200) : null;
+
+  // ① 정답(D1)을 먼저 고치고 ② KV 사본을 맞춥니다.
+  await c.env.DB.prepare("UPDATE links SET url = ?1, title = ?2 WHERE code = ?3").bind(url, title, code).run();
+  if (url !== current.url) {
+    if (current.expires_at) {
+      // 만료가 있는 링크는 남은 시간만큼 TTL 을 다시 걸어 줍니다. (KV 의 expirationTtl 최소값은 60초)
+      const remaining = Math.max(current.expires_at - nowSec(), 60);
+      await c.env.LINKS.put(code, url, { expirationTtl: remaining });
+    } else {
+      await c.env.LINKS.put(code, url);
+    }
+  }
+  // 주의: KV 는 최종 일관성 + 리다이렉트의 cacheTtl(60초) 때문에
+  //       다른 지역에서는 최대 1~2분 동안 이전 URL 로 이동할 수 있습니다.
+  return c.json({ code, url, title });
+});
+
+app.delete("/api/links/:code", async (c) => {
+  if (!isAdmin(c)) return c.json({ error: "권한이 없습니다. 관리자 토큰을 확인하세요." }, 401);
   const code = c.req.param("code");
   // clicks 는 FOREIGN KEY ... ON DELETE CASCADE 로 함께 지워집니다.
   const { meta } = await c.env.DB.prepare("DELETE FROM links WHERE code = ?1").bind(code).run();
@@ -181,7 +228,8 @@ app.get("/:code", async (c) => {
 
   // ① KV 에서 먼저 찾습니다. (엣지 캐시 덕분에 매우 빠름)
   //    cacheTtl: 이 엣지 위치에서 값을 캐시할 시간(초, 최소 60)
-  let url = await c.env.LINKS.get(code, { cacheTtl: 300 });
+  //    수정 기능이 있으므로 짧게(60초) 둡니다. 길수록 빠르지만 수정 반영이 늦어집니다.
+  let url = await c.env.LINKS.get(code, { cacheTtl: 60 });
 
   // ② KV 에 없으면 D1 에서 한 번 더 찾습니다.
   //    방금 만든 링크가 다른 지역 KV 에 아직 반영되지 않았을 수 있기 때문입니다(최종 일관성).

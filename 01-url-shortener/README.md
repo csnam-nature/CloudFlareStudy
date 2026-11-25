@@ -35,12 +35,22 @@
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| GET | `/` | 웹 폼 (브라우저로 열어 보세요) |
+| GET | `/` | 웹 화면: 링크 생성, 목록(열기·통계·수정·삭제) |
 | POST | `/api/links` | 링크 생성. 본문: `{ "url": "...", "title"?: "...", "code"?: "my-alias", "ttlDays"?: 7 }` |
 | GET | `/api/links?limit=20` | 최근 링크 목록 + 클릭 수 |
 | GET | `/api/stats/:code` | 총 클릭, 국가별, 리퍼러별, 최근 30일 일별 |
+| PATCH | `/api/links/:code` | 원래 URL·제목 수정. 본문: `{ "url"?: "...", "title"?: "..." }`. 헤더 `Authorization: Bearer <ADMIN_TOKEN>` 필요 |
 | DELETE | `/api/links/:code` | 링크 삭제. 헤더 `Authorization: Bearer <ADMIN_TOKEN>` 필요 |
 | GET | `/:code` | 원래 URL 로 302 리다이렉트 |
+
+## 웹 화면 사용법
+
+- 목록의 **코드**를 누르면 새 탭에서 단축 URL 로 이동하고 클릭 수가 1 올라갑니다. 목록은 탭으로 돌아오거나 15초마다 자동으로 갱신됩니다.
+- **통계**: 국가·리퍼러·날짜별 클릭 수를 목록 아래에 보여 줍니다.
+- **수정·삭제**: 화면의 "관리자 토큰" 칸에 `ADMIN_TOKEN` 값(로컬은 `.dev.vars`, 배포는 `wrangler secret put` 으로 넣은 값)을 한 번 저장하면 쓸 수 있습니다.
+  토큰은 이 브라우저의 localStorage 에만 저장되니, 공용 PC 에서는 "지우기"를 누르세요.
+- URL 을 수정하면 KV 최종 일관성과 리다이렉트의 `cacheTtl`(60초) 때문에 다른 지역에서는 1~2분 동안 이전 URL 로 이동할 수 있습니다.
+- 단축 코드 자체는 바꿀 수 없습니다. 이미 공유된 단축 URL 이 깨지기 때문입니다. 다른 코드가 필요하면 새로 만드세요.
 
 ## 로컬에서 실행하기 (Cloudflare 계정 불필요)
 

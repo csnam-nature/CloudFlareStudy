@@ -64,7 +64,30 @@ res = await fetch(`${BASE}/api/links`);
 const list = await res.json();
 check("GET /api/links 에 새 링크 포함", list.links.some((l) => l.code === code));
 
-// 7. 삭제 (토큰 없이 401, 토큰으로 200)
+// 7. 수정 (토큰 없이 401, 토큰으로 URL 변경 → 리다이렉트 대상 변경)
+res = await fetch(`${BASE}/api/links/${custom}`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ url: "https://example.net/changed" }),
+});
+check("토큰 없는 수정 → 401", res.status === 401);
+res = await fetch(`${BASE}/api/links/${custom}`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json", authorization: `Bearer ${ADMIN}` },
+  body: JSON.stringify({ url: "https://example.net/changed", title: "수정됨" }),
+});
+check("토큰 수정 → 200", res.status === 200);
+res = await fetch(`${BASE}/api/links/${custom}`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json", authorization: `Bearer ${ADMIN}` },
+  body: JSON.stringify({ url: "ftp://bad" }),
+});
+check("잘못된 URL 로 수정 → 400", res.status === 400);
+res = await fetch(`${BASE}/${custom}`, { redirect: "manual" });
+// 로컬은 KV 가 즉시 반영되지만, 실제 배포에서는 cacheTtl·최종 일관성 때문에 1~2분 늦을 수 있습니다.
+check("수정 후 리다이렉트 대상 변경", res.headers.get("location") === "https://example.net/changed", res.headers.get("location") ?? "");
+
+// 8. 삭제 (토큰 없이 401, 토큰으로 200)
 res = await fetch(`${BASE}/api/links/${custom}`, { method: "DELETE" });
 check("토큰 없는 삭제 → 401", res.status === 401);
 res = await fetch(`${BASE}/api/links/${custom}`, { method: "DELETE", headers: { authorization: `Bearer ${ADMIN}` } });
