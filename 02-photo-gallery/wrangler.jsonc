@@ -1,0 +1,53 @@
+// Wrangler 설정 파일 (JSON + 주석 허용)
+// 정적 자산(public/) + Worker(src/) 를 한 번에 배포하고, R2·D1·Images 를 바인딩으로 붙입니다.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "photo-gallery",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+
+  // Workers Logs: 대시보드에서 console.log 를 볼 수 있게 합니다.
+  "observability": { "enabled": true },
+
+  // ── Workers Static Assets ─────────────────────────────────
+  // public/ 폴더의 HTML·CSS·JS 를 그대로 서비스합니다. 정적 파일 요청은 무료·무제한이고 Worker 요청 수에도 잡히지 않습니다.
+  // run_worker_first: 이 경로들만 Worker 코드(src/index.ts)가 먼저 받습니다. 나머지는 정적 파일.
+  // not_found_handling: 없는 경로는 index.html 을 돌려줍니다(SPA 방식, 예: /#/album/3 새로고침 대비).
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/img/*"]
+  },
+
+  // ── R2 (오브젝트 스토리지) ─────────────────────────────────
+  // 원본 사진(originals/<id>)과 썸네일(thumbs/<폭>/<id>.webp)을 저장합니다.
+  // 배포 전에 `npx wrangler r2 bucket create photo-gallery` 로 버킷을 만드세요. (R2 는 id 없이 이름으로 연결)
+  "r2_buckets": [
+    { "binding": "PHOTOS", "bucket_name": "photo-gallery" }
+  ],
+
+  // ── D1 (서버리스 SQLite) ───────────────────────────────────
+  // 앨범과 사진 메타데이터.
+  // 배포 전에 `npx wrangler d1 create photo-gallery-db` 를 실행하고, 출력된 database_id 를 아래에 직접 붙여 넣으세요.
+  // 로컬(wrangler dev)에서는 이 값이 임시값이어도 .wrangler/state 에 에뮬레이션됩니다.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "photo-gallery-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // ── Images 바인딩 ─────────────────────────────────────────
+  // 원본 하나로 썸네일 크기 조절 + WebP 변환. 무료 플랜은 월 5,000건(고유 변환 기준).
+  // 로컬에서는 Wrangler 가 sharp 라이브러리로 흉내 냅니다(일부 옵션만 지원).
+  "images": { "binding": "IMAGES" },
+
+  // 환경 변수 (비밀이 아닌 값만). 비밀 값(ADMIN_TOKEN)은 `wrangler secret put` 사용.
+  "vars": {
+    // 사진 한 장의 최대 크기(MB). Worker 요청 본문 한도(무료 100MB)보다 충분히 작게.
+    "MAX_UPLOAD_MB": "20"
+  }
+}

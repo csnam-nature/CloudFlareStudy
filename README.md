@@ -6,7 +6,7 @@ Cloudflare 개발자 플랫폼을 미니 프로젝트로 익히는 학습 저장
 | 폴더 | 프로젝트 | 핵심 서비스 | 상태 |
 | --- | --- | --- | --- |
 | [01-url-shortener](./01-url-shortener) | URL 단축기 | Workers, KV, D1, Cron Triggers, Rate Limiting | 완료 |
-| 02-photo-gallery | 사진 갤러리 | Workers Static Assets, R2, D1, Images | 예정 |
+| [02-photo-gallery](./02-photo-gallery) | 사진 갤러리 | Workers Static Assets, R2, D1, Images | 완료 |
 | 03-ai-doc-chatbot | 사내 문서 AI 챗봇 | Workers AI, Vectorize/AI Search, Agents SDK, AI Gateway, Queues | 예정 |
 
 ## 공통 준비물

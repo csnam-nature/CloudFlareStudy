@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>사진 갤러리</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- 정적 자산: 이 파일은 Worker 코드를 거치지 않고 public/ 에서 바로 서비스됩니다. -->
+  <header class="top">
+    <h1>사진 갤러리</h1>
+    <form id="tokenForm" class="token">
+      <input id="tokenInput" type="password" placeholder="관리자 토큰" autocomplete="off" />
+      <button type="submit">저장</button>
+      <button type="button" id="tokenClear">지우기</button>
+      <span id="adminBadge" class="badge" hidden>관리자</span>
+    </form>
+  </header>
+
+  <main>
+    <section class="toolbar">
+      <nav id="albumTabs" class="tabs" aria-label="앨범"></nav>
+      <div class="toolbar-right">
+        <span id="albumActions" class="admin-only">
+          <button type="button" id="albumNew">+ 앨범</button>
+          <button type="button" id="albumRename" hidden>이름 바꾸기</button>
+          <button type="button" id="albumDelete" class="danger" hidden>앨범 삭제</button>
+        </span>
+        <input id="search" type="search" placeholder="제목·파일 이름 검색" />
+      </div>
+    </section>
+
+    <!-- 업로드 (관리자만 보임) -->
+    <section id="upload" class="upload admin-only">
+      <label id="dropZone" class="drop">
+        <input id="fileInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/avif" multiple hidden />
+        <strong>사진을 끌어다 놓거나 눌러서 선택</strong>
+        <small>JPEG·PNG·GIF·WebP·AVIF, 장당 <span id="maxMb">20</span>MB 까지. JPEG 촬영일은 자동으로 읽습니다.</small>
+      </label>
+      <div class="upload-bar">
+        <label>올릴 앨범 <select id="uploadAlbum"></select></label>
+        <button type="button" id="uploadStart" disabled>업로드</button>
+        <button type="button" id="uploadClear">목록 비우기</button>
+      </div>
+      <ul id="queue" class="queue"></ul>
+    </section>
+
+    <p id="status" class="status"></p>
+    <section id="grid" class="grid" aria-live="polite"></section>
+    <div class="more"><button type="button" id="loadMore" hidden>더 보기</button></div>
+  </main>
+
+  <!-- 크게 보기 (라이트박스) -->
+  <dialog id="viewer" class="viewer">
+    <div class="viewer-body">
+      <div class="stage">
+        <button type="button" class="nav prev" id="prevBtn" aria-label="이전">‹</button>
+        <img id="viewerImg" alt="" />
+        <button type="button" class="nav next" id="nextBtn" aria-label="다음">›</button>
+      </div>
+      <aside class="info">
+        <button type="button" class="close" id="closeBtn" aria-label="닫기">✕</button>
+        <h2 id="infoTitle"></h2>
+        <dl id="infoList"></dl>
+        <div class="info-actions">
+          <a id="openOriginal" target="_blank" rel="noopener">원본 열기</a>
+          <a id="downloadOriginal">다운로드</a>
+        </div>
+        <form id="editForm" class="edit admin-only">
+          <h3>정보 수정</h3>
+          <label>제목 <input name="title" maxlength="200" /></label>
+          <label>앨범 <select name="albumId"></select></label>
+          <label>촬영일 <input name="takenAt" type="datetime-local" step="1" /></label>
+          <div class="row">
+            <button type="submit">저장</button>
+            <button type="button" id="deletePhoto" class="danger">사진 삭제</button>
+          </div>
+          <p id="editMsg" class="msg"></p>
+        </form>
+      </aside>
+    </div>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
