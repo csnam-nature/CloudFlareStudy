@@ -1,0 +1,53 @@
+// Wrangler 설정 파일 (JSON + 주석 허용)
+// 바인딩(binding)을 여기에 선언하면 코드에서 env.LINKS, env.DB 처럼 바로 쓸 수 있습니다.
+// API 키나 접속 문자열이 필요 없다는 것이 Cloudflare 바인딩의 핵심입니다.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "url-shortener",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+
+  // Workers Logs: 대시보드에서 console.log 를 볼 수 있게 합니다.
+  "observability": { "enabled": true },
+
+  // ── Workers KV ─────────────────────────────────────────────
+  // 단축 코드 → 원래 URL 매핑. 키 하나로 읽는 "초고속 조회" 용도.
+  // 배포 전에 `npx wrangler kv namespace create LINKS` 로 만든 id 로 바꾸세요.
+  // 로컬(wrangler dev)에서는 id 값과 상관없이 .wrangler/state 에 에뮬레이션됩니다.
+  "kv_namespaces": [
+    { "binding": "LINKS", "id": "00000000000000000000000000000000" }
+  ],
+
+  // ── D1 (서버리스 SQLite) ───────────────────────────────────
+  // 링크 메타데이터와 클릭 로그. 조건 검색·집계(GROUP BY)가 필요한 데이터.
+  // 배포 전에 `npx wrangler d1 create url-shortener-db` 로 만든 database_id 로 바꾸세요.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "url-shortener-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // ── Rate Limiting 바인딩 (선택) ─────────────────────────────
+  // 링크 생성 API 남용 방지: 같은 IP 에서 60초에 10회까지만 허용.
+  "ratelimits": [
+    {
+      "name": "CREATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ],
+
+  // ── Cron Trigger (선택) ────────────────────────────────────
+  // 매일 18:00 UTC(한국 시간 새벽 3시)에 scheduled() 핸들러가 실행되어
+  // 만료된 링크를 D1 에서 정리합니다. (KV 는 expirationTtl 로 자동 삭제)
+  "triggers": { "crons": ["0 18 * * *"] },
+
+  // 환경 변수 (비밀이 아닌 값만). 비밀 값은 `wrangler secret put` 사용.
+  "vars": {
+    // 자동 생성되는 단축 코드 길이
+    "CODE_LENGTH": "6"
+  }
+}

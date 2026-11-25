@@ -1,0 +1,2 @@
+# 로컬 개발용 비밀 값. 이 파일을 .dev.vars 로 복사해서 쓰세요. (.dev.vars 는 git 에 올라가지 않습니다)
+ADMIN_TOKEN=local-admin-token
