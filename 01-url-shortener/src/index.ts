@@ -98,7 +98,10 @@ app.post("/api/links", async (c) => {
 // 2) 최근 링크 목록 (D1)
 // ─────────────────────────────────────────────────────────────
 app.get("/api/links", async (c) => {
-  const limit = Math.min(Number(c.req.query("limit")) || 20, 100);
+  // limit 은 1~100 사이 정수로 고정합니다. 음수(-1)를 그대로 넘기면 SQLite 가 "제한 없음"으로 해석해
+  // 전체 링크를 반환하므로, 숫자가 아니거나 1 미만이면 기본값 20 을 씁니다.
+  const rawLimit = Number(c.req.query("limit"));
+  const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 20;
   // 상관 서브쿼리의 COUNT 는 idx_clicks_code_time 인덱스를 타므로 전체 스캔하지 않습니다.
   const { results } = await c.env.DB.prepare(
     `SELECT l.code, l.url, l.title, l.created_at AS createdAt, l.expires_at AS expiresAt,

@@ -60,6 +60,18 @@ f.addEventListener("submit", async (e) => {
   loadList();
 });
 loadList();
+
+// 목록 자동 새로고침
+// - 다른 탭(예: 단축 URL 로 이동한 탭)에서 돌아오면 즉시 다시 불러옵니다.
+// - 뒤로 가기로 돌아온 경우(브라우저가 페이지를 캐시에서 복원)에도 다시 불러옵니다.
+// - 화면이 보이는 동안에는 15초마다 갱신합니다. 숨겨진 탭에서는 요청하지 않아 D1 읽기 한도를 아낍니다.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") loadList();
+});
+window.addEventListener("pageshow", (e) => { if (e.persisted) loadList(); });
+setInterval(() => {
+  if (document.visibilityState === "visible") loadList();
+}, 15000);
 </script>
 </body>
 </html>`;
