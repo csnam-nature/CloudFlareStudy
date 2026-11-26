@@ -19,7 +19,7 @@ import { type AppEnv, type Bindings, type IndexJob, isAdmin, isMock } from "./au
 import { conversations } from "./conversations";
 import { documents } from "./documents";
 import { handleIndexBatch } from "./indexer";
-import { getSettings, settingsApi } from "./settings";
+import { getSettings, settingsApi, webSearchState } from "./settings";
 
 export { ChatAgent } from "./agent";
 
@@ -39,6 +39,8 @@ app.get("/api/me", async (c) => {
     embedModel: c.env.EMBED_MODEL,
     gateway: c.env.AI_GATEWAY_ID || null,
     maxUploadMb: Number(c.env.MAX_UPLOAD_MB) || 10,
+    // 질문창의 🌐 웹 검색: 관리자가 허용했고 답변 모델이 Claude·OpenAI 일 때만 쓸 수 있음
+    webSearch: webSearchState(c.env, s),
   });
 });
 

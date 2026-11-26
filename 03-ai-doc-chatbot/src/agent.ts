@@ -22,8 +22,8 @@
 import { Agent, type Connection, type ConnectionContext, type WSMessage } from "agents";
 import { type ChatMessage, streamChat } from "./ai";
 import { type Bindings, isMock } from "./auth";
-import { buildMessages, mockAnswer, retrieve, type Source } from "./rag";
-import { getSettings } from "./settings";
+import { type AnswerMode, buildMessages, GENERAL_LABEL, mockAnswer, retrieve, type Source, toMode } from "./rag";
+import { getSettings, webSearchState } from "./settings";
 
 type StoredMessage = {
   id: number;
@@ -33,7 +33,8 @@ type StoredMessage = {
   created_at: number;
 };
 
-type ClientMessage = { type: "ask"; text?: string; docId?: number | null } | { type: "reset" };
+// mode: 답변 모드(문서만·문서 우선+일반 지식·일반 질문), web: 웹 검색 사용
+type ClientMessage = { type: "ask"; text?: string; docId?: number | null; mode?: string; web?: boolean } | { type: "reset" };
 
 const HISTORY_TURNS = 3; // LLM 에 함께 보낼 최근 대화(질문+답변) 쌍 수
 const KEEP_MESSAGES = 200; // 인스턴스에 보관할 최대 메시지 수
@@ -103,13 +104,13 @@ export class ChatAgent extends Agent<Bindings> {
 
     this.busy = true;
     try {
-      await this.answer(question, msg.docId ? Number(msg.docId) : undefined);
+      await this.answer(connection, question, msg.docId ? Number(msg.docId) : undefined, toMode(msg.mode), msg.web === true);
     } catch (err) {
       console.error("답변 실패", err);
       const text = err instanceof Error ? err.message : String(err);
       // 모델 접근 불가(5018)·지원 종료(5028)·유료 플랜 필요(5035)는 설정으로 고칠 수 있으므로 방법을 덧붙입니다.
       const hint = /\b(5018|5028|5035)\b/.test(text)
-        ? ` (지금 답변 모델을 쓸 수 없습니다. 문서 관리 화면의 "설정"에서 다른 모델을 고르고 [시험]으로 확인한 뒤 저장하세요)`
+        ? ` (지금 답변 모델을 쓸 수 없습니다. 설정 화면에서 다른 모델을 고르고 [시험]으로 확인한 뒤 저장하세요)`
         : "";
       this.sendError(connection, `답변을 만들지 못했습니다: ${text}${hint}`);
     } finally {
@@ -117,7 +118,7 @@ export class ChatAgent extends Agent<Bindings> {
     }
   }
 
-  private async answer(question: string, docId?: number) {
+  private async answer(connection: Connection, question: string, docId: number | undefined, mode: AnswerMode, wantWeb: boolean) {
     // 직전 대화(최근 N턴)를 먼저 읽어 둡니다. "그럼 E-22 는?" 같은 이어지는 질문을 이해시키기 위해서입니다.
     const history = this.sql<StoredMessage>`SELECT * FROM messages ORDER BY id DESC LIMIT ${HISTORY_TURNS * 2}`
       .reverse()
@@ -136,10 +137,17 @@ export class ChatAgent extends Agent<Bindings> {
     const id = draft.id;
     this.broadcast(JSON.stringify({ type: "start", id }));
 
-    // 1) 검색
+    // 1) 검색 (일반 질문 모드는 문서 검색을 건너뜀)
     const mock = isMock(this.env);
     const settings = await getSettings(this.env);
-    const sources = await retrieve(this.env, settings, question, mock, docId);
+    const sources = mode === "general" ? [] : await retrieve(this.env, settings, question, mock, docId);
+    // 웹 검색은 쓸 수 있을 때만. 못 쓰면 이유를 알리고 웹 검색 없이 답합니다.
+    let web = false;
+    if (wantWeb) {
+      const st = webSearchState(this.env, settings);
+      if (st.available) web = true;
+      else connection.send(JSON.stringify({ type: "notice", message: `웹 검색 없이 답합니다: ${st.reason}` }));
+    }
     const shortSources = sources.map(shorten);
     this.current = { id, content: "", sources: shortSources };
     this.broadcast(JSON.stringify({ type: "sources", id, sources: shortSources }));
@@ -147,7 +155,8 @@ export class ChatAgent extends Agent<Bindings> {
     // 2) 생성 (스트리밍)
     let content = "";
     try {
-      for await (const piece of streamChat(this.env, settings, buildMessages(question, sources, history, settings.systemPrompt), mockAnswer(question, sources))) {
+      const messages = buildMessages(question, sources, history, { systemPrompt: settings.systemPrompt, mode, web });
+      for await (const piece of streamChat(this.env, settings, messages, mockForMode(mode, question, sources), web)) {
         content += piece;
         this.current.content = content;
         this.broadcast(JSON.stringify({ type: "delta", id, text: piece }));
@@ -166,6 +175,14 @@ export class ChatAgent extends Agent<Bindings> {
   private sendError(connection: Connection, message: string) {
     connection.send(JSON.stringify({ type: "error", message }));
   }
+}
+
+/** 연습 모드의 가짜 답변 (답변 모드별) */
+function mockForMode(mode: AnswerMode, question: string, sources: Source[]): string {
+  if (mode === "general") return "(연습 모드 · 일반 질문) 진짜 AI 모드(npm run dev)에서는 문서 검색 없이 일반 지식으로 답합니다.";
+  if (mode === "mixed" && !sources.length)
+    return `(연습 모드 · 문서 우선 + 일반 지식)\n\n${GENERAL_LABEL} 진짜 AI 모드에서는 여기서 일반 지식으로 답합니다.`;
+  return mockAnswer(question, sources);
 }
 
 /** 화면에 보낼 근거: 원문은 앞부분만 */

@@ -150,7 +150,7 @@ function splitSystem(messages: ProviderMessage[]) {
  * - 생각(thinking)은 모델이 알아서 정하고(adaptive), 깊이는 effort 로 조절합니다. 설정에서 생각 모드를 끄면 low.
  * - fallbacks "default": 정책상 답을 거절하면 같은 요청을 Anthropic 이 정한 다른 모델로 한 번 더 시도합니다.
  */
-function claudeParams(s: Settings, messages: ProviderMessage[], maxTokens: number) {
+function claudeParams(s: Settings, messages: ProviderMessage[], maxTokens: number, web = false) {
   return {
     model: bareModel(s.chatModel),
     max_tokens: maxTokens,
@@ -158,34 +158,151 @@ function claudeParams(s: Settings, messages: ProviderMessage[], maxTokens: numbe
     output_config: { effort: s.thinking ? ("medium" as const) : ("low" as const) },
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default" as const,
+    ...(web ? { tools: [claudeWebTool(s.chatModel)] } : {}),
   };
 }
 
-async function* streamClaude(env: Bindings, s: Settings, messages: ProviderMessage[], maxTokens: number): AsyncGenerator<string> {
+/** 웹 검색 한 번에 쓸 수 있는 검색 횟수(검색 1회마다 요금이 붙습니다) */
+const WEB_MAX_USES = 3;
+const KOREA = { type: "approximate" as const, country: "KR", timezone: "Asia/Seoul" };
+
+/**
+ * Claude 의 자체 웹 검색 도구(Anthropic 서버에서 검색). Opus·Sonnet 5.x 는 결과를 걸러 주는 새 버전, 그 밖(Haiku 등)은 기본 버전.
+ * Anthropic 콘솔의 조직 설정에서 웹 검색이 켜져 있어야 합니다.
+ */
+function claudeWebTool(model: string) {
+  return /opus-5|sonnet-5|fable|mythos/.test(model)
+    ? { type: "web_search_20260209" as const, name: "web_search" as const, max_uses: WEB_MAX_USES, user_location: KOREA }
+    : { type: "web_search_20250305" as const, name: "web_search" as const, max_uses: WEB_MAX_USES, user_location: KOREA };
+}
+
+/** 웹 출처 목록을 답 끝에 붙일 Markdown 으로 */
+function webSourcesMarkdown(list: Map<string, string>): string {
+  if (!list.size) return "";
+  const lines = [...list].slice(0, 8).map(([url, title]) => `- [${(title || url).replace(/[[\]]/g, "")}](${url})`);
+  return `\n\n🌐 **웹 출처**\n${lines.join("\n")}`;
+}
+
+async function* streamClaude(env: Bindings, s: Settings, messages: ProviderMessage[], maxTokens: number, web = false): AsyncGenerator<string> {
   const client = await claudeClient(env);
-  const stream = client.beta.messages.stream(claudeParams(s, messages, maxTokens));
+  const params = claudeParams(s, messages, maxTokens, web);
+  const webSources = new Map<string, string>();
   let yielded = 0;
-  for await (const ev of stream) {
-    if (ev.type === "content_block_delta" && ev.delta.type === "text_delta" && ev.delta.text) {
-      yielded += ev.delta.text.length;
-      yield ev.delta.text;
+  let final;
+  // 웹 검색은 서버에서 여러 번 돌다가 "pause_turn"으로 잠시 멈출 수 있어, 그때는 이어서 요청합니다(최대 3번).
+  for (let round = 0; ; round++) {
+    const stream = client.beta.messages.stream(params);
+    for await (const ev of stream) {
+      if (ev.type === "content_block_delta" && ev.delta.type === "text_delta" && ev.delta.text) {
+        yielded += ev.delta.text.length;
+        yield ev.delta.text;
+      }
     }
+    final = await stream.finalMessage();
+    for (const b of final.content) {
+      if (b.type !== "text") continue;
+      for (const c of b.citations ?? []) if (c.type === "web_search_result_location") webSources.set(c.url, c.title ?? "");
+    }
+    if (final.stop_reason !== "pause_turn" || round >= 2) break;
+    params.messages = [...params.messages, { role: "assistant", content: final.content as never }];
   }
-  const final = await stream.finalMessage();
   if (final.stop_reason === "refusal") {
     yield `${yielded ? "\n\n" : ""}(Claude 가 이 질문에는 답하지 않았습니다. 질문을 바꿔 보세요.)`;
     return;
   }
   if (!yielded) throw new Error(final.stop_reason === "max_tokens" ? "답변 길이 상한에 걸려 본문이 비었습니다. 설정에서 답변 길이 상한을 늘려 보세요." : "Claude 가 빈 답을 돌려줬습니다.");
   if (final.stop_reason === "max_tokens") yield "\n\n…(답변 길이 상한에 걸려 여기서 끊겼습니다)";
+  const tail = webSourcesMarkdown(webSources);
+  if (tail) yield tail;
+}
+
+// ── OpenAI 웹 검색 (Responses API) ─────────────────────
+
+/**
+ * OpenAI 는 웹 검색 도구를 Responses API 에서 씁니다. 스트림 이벤트:
+ *   response.output_text.delta → 본문 조각, response.completed → 끝(출처는 url_citation 주석),
+ *   response.failed · error → 오류, response.incomplete → 길이 상한 등으로 중단
+ */
+async function* streamOpenAIWeb(env: Bindings, s: Settings, messages: ProviderMessage[], maxTokens: number): AsyncGenerator<string> {
+  const key = needKey(env, "openai");
+  const instructions = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
+  const input = messages.filter((m) => m.role !== "system").map((m) => ({ role: m.role, content: m.content }));
+  const res = await fetch(`${await baseUrl(env, "openai")}/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}`, ...gatewayHeaders(env) },
+    body: JSON.stringify({
+      model: bareModel(s.chatModel),
+      instructions,
+      input,
+      stream: true,
+      max_output_tokens: maxTokens,
+      reasoning: { effort: s.thinking ? "medium" : "low" },
+      tools: [{ type: "web_search", user_location: { type: "approximate", country: "KR", timezone: "Asia/Seoul" } }],
+    }),
+  });
+  if (!res.ok || !res.body) throw new Error(`OpenAI 오류 ${res.status}: ${(await res.text()).slice(0, 300)}`);
+
+  type Annot = { type?: string; url?: string; title?: string };
+  type Ev = {
+    type?: string;
+    delta?: string;
+    message?: string;
+    error?: { message?: string };
+    response?: {
+      error?: { message?: string } | null;
+      incomplete_details?: { reason?: string } | null;
+      output?: { type?: string; content?: { type?: string; annotations?: Annot[] }[] }[];
+    };
+  };
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  const webSources = new Map<string, string>();
+  let buf = "";
+  let yielded = 0;
+  let end: "completed" | "incomplete" | "" = "";
+  let incompleteReason = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      let ev: Ev;
+      try {
+        ev = JSON.parse(line.slice(5).trim());
+      } catch {
+        continue;
+      }
+      if (ev.type === "response.output_text.delta" && ev.delta) {
+        yielded += ev.delta.length;
+        yield ev.delta;
+      } else if (ev.type === "error" || ev.type === "response.failed") {
+        throw new Error(`OpenAI 오류: ${(ev.message ?? ev.error?.message ?? ev.response?.error?.message ?? "알 수 없는 오류").slice(0, 300)}`);
+      } else if (ev.type === "response.completed" || ev.type === "response.incomplete") {
+        end = ev.type === "response.completed" ? "completed" : "incomplete";
+        incompleteReason = ev.response?.incomplete_details?.reason ?? "";
+        for (const item of ev.response?.output ?? [])
+          for (const c of item.content ?? [])
+            for (const a of c.annotations ?? []) if (a.type === "url_citation" && a.url) webSources.set(a.url, a.title ?? "");
+      }
+    }
+  }
+  if (!end) throw new Error("OpenAI 답변이 끝나기 전에 연결이 끊겼습니다. 다시 질문해 보세요.");
+  if (!yielded) throw new Error(end === "incomplete" ? `답변이 중간에 멈췄습니다(${incompleteReason}). 설정에서 답변 길이 상한을 늘려 보세요.` : "OpenAI 가 빈 답을 돌려줬습니다.");
+  if (end === "incomplete") yield "\n\n…(답변 길이 상한에 걸려 여기서 끊겼습니다)";
+  const tail = webSourcesMarkdown(webSources);
+  if (tail) yield tail;
 }
 
 // ── 공용 ───────────────────────────────────────────────
 
-/** 외부 AI 로 답변 스트리밍 */
-export function streamExternal(env: Bindings, s: Settings, messages: ProviderMessage[]): AsyncGenerator<string> {
+/** 외부 AI 로 답변 스트리밍. web 이면 그 회사의 자체 웹 검색 도구를 함께 씁니다. */
+export function streamExternal(env: Bindings, s: Settings, messages: ProviderMessage[], web = false): AsyncGenerator<string> {
   const max = externalMaxTokens(s);
-  return providerOf(s.chatModel) === "openai" ? streamOpenAI(env, s, messages, max) : streamClaude(env, s, messages, max);
+  if (providerOf(s.chatModel) === "openai") return web ? streamOpenAIWeb(env, s, messages, max) : streamOpenAI(env, s, messages, max);
+  return streamClaude(env, s, messages, max, web);
 }
 
 /** 설정 화면의 "시험" 버튼: 짧은 질문 하나를 보내 키·모델이 맞는지 확인합니다. */

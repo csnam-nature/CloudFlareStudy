@@ -258,7 +258,8 @@ export type ChatMessage = { role: "system" | "user" | "assistant"; content: stri
  *   data: {"choices":[{"delta":{"content":"안녕"}}]}  ← OpenAI 호환 형식(일부 모델)
  *   data: [DONE]
  */
-export async function* streamChat(env: Bindings, s: Settings, messages: ChatMessage[], mockAnswer: string): AsyncGenerator<string> {
+/** web: 웹 검색을 쓸지 (Claude·OpenAI 모델에서만. 부르는 쪽에서 확인합니다) */
+export async function* streamChat(env: Bindings, s: Settings, messages: ChatMessage[], mockAnswer: string, web = false): AsyncGenerator<string> {
   if (isMock(env)) {
     // 연습 모드: 미리 만든 답을 단어 단위로 조금씩 흘려 보내 스트리밍을 흉내 냅니다.
     for (const word of mockAnswer.split(/(?<=\s)/)) {
@@ -271,7 +272,7 @@ export async function* streamChat(env: Bindings, s: Settings, messages: ChatMess
   // OpenAI·Claude 를 고른 경우(모델 이름이 openai/… anthropic/…)
   if (providerOf(s.chatModel) !== "workers-ai") {
     try {
-      yield* streamExternal(env, s, messages);
+      yield* streamExternal(env, s, messages, web);
     } catch (e) {
       throw new Error(explainExternalError(e));
     }

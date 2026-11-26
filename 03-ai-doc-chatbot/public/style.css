@@ -224,3 +224,15 @@ table.docs .actions a { border: 1px solid var(--line); border-radius: 8px; text-
 .ext-status { display: grid; gap: 4px; margin: 4px 0 8px; }
 .settings details { margin: 6px 0; }
 .settings details pre { background: #f6f7f9; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 13px; overflow-x: auto; }
+
+/* 질문창 옆 답변 모드 · 웹 검색 */
+.ask-opts { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.ask-opts select { font-size: 13px; padding: 4px 6px; max-width: 210px; }
+.web-toggle { display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; color: var(--text); }
+.web-toggle.off { color: var(--muted); cursor: help; }
+.msg.bot .bubble p.general-info { background: #f3f6ff; border-left: 3px solid #6b8cff; padding: 4px 8px; border-radius: 0 6px 6px 0; }
+.msg.bot .bubble a { word-break: break-all; }
+@media (max-width: 640px) {
+  footer.composer form { flex-wrap: wrap; }
+  .ask-opts { flex-direction: row; width: 100%; }
+}

@@ -5,6 +5,7 @@
 // 저장한 값은 다음 요청부터 바로 쓰입니다(색인 관련 값은 다음에 올리거나 "다시 색인"하는 문서부터).
 
 import { Hono } from "hono";
+import { MODE_RULES, SYSTEM_PROMPT } from "./rag";
 import { explainExternalError, keyStatus, providerOf, testExternal } from "./providers";
 import { type AppEnv, type Bindings, isMock, nowSec, requireAdmin } from "./auth";
 
@@ -21,6 +22,7 @@ export type Settings = {
   chunkOverlap: number; // 조각끼리 겹치는 글자 수
   maxChunksPerDoc: number; // 문서 하나의 조각 수 한도
   systemPrompt: string; // 비우면 기본 규칙(src/rag.ts)
+  allowWebSearch: boolean; // 질문창의 🌐 웹 검색 허용 (Claude·OpenAI 모델만, 검색마다 요금)
 };
 
 /** 고를 수 있는 모델 목록 (2026-11 기준 무료 플랜에서 쓸 수 있고 지원 종료 예정이 아닌 모델). 목록에 없는 모델은 직접 입력할 수 있습니다. */
@@ -76,6 +78,7 @@ export function defaults(env: Bindings): Settings {
     chunkOverlap: 100,
     maxChunksPerDoc: Number(env.MAX_CHUNKS_PER_DOC) || 400,
     systemPrompt: "",
+    allowWebSearch: true,
   };
 }
 
@@ -87,7 +90,7 @@ function clean(key: keyof Settings, v: unknown): Settings[keyof Settings] {
     if (!Number.isFinite(n) || n < range[0] || n > range[1]) throw new Error(`${key} 는 ${range[0]} ~ ${range[1]} 사이 숫자여야 합니다.`);
     return ["topK", "maxTokens", "chunkSize", "chunkOverlap", "maxChunksPerDoc"].includes(key) ? Math.round(n) : n;
   }
-  if (key === "thinking") return v === true || v === "true";
+  if (key === "thinking" || key === "allowWebSearch") return v === true || v === "true";
   const s = String(v ?? "").trim();
   if (key === "chatModel" && /^(openai|anthropic)\/[\w.:-]+$/.test(s)) return s; // 외부 AI (src/providers.ts)
   if (key === "chatModel" || key === "ocrModel") {
@@ -122,6 +125,20 @@ export async function getSettings(env: Bindings): Promise<Settings> {
   return s;
 }
 
+/**
+ * 웹 검색을 쓸 수 있는지와 못 쓰는 이유.
+ * Workers AI 모델에는 자체 웹 검색 도구가 없어 Claude·OpenAI 모델을 골랐을 때만 됩니다.
+ */
+export function webSearchState(env: Bindings, s: Settings): { available: boolean; reason: string } {
+  if (!s.allowWebSearch) return { available: false, reason: "관리자가 웹 검색을 꺼 두었습니다(설정 화면)." };
+  const p = providerOf(s.chatModel);
+  if (p === "workers-ai") return { available: false, reason: "웹 검색은 답변 모델이 Claude·OpenAI 일 때만 됩니다(설정 화면에서 모델 변경)." };
+  if (isMock(env)) return { available: false, reason: "연습 모드에서는 웹 검색을 하지 않습니다." };
+  const key = p === "openai" ? env.OPENAI_API_KEY : env.ANTHROPIC_API_KEY;
+  if (!key) return { available: false, reason: `${p === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"} 가 없어 쓸 수 없습니다.` };
+  return { available: true, reason: "" };
+}
+
 /** 생각(reasoning) 모드를 끄는 옵션을 받는 모델인지 */
 export const supportsThinkingSwitch = (model: string) => /gemma-4|qwen3|glm-4\.7|glm-5/.test(model);
 
@@ -139,6 +156,8 @@ settingsApi.get("/", requireAdmin, async (c) =>
     embedModel: c.env.EMBED_MODEL,
     mock: isMock(c.env),
     external: keyStatus(c.env), // 외부 AI 키가 들어 있는지(값은 보내지 않음)
+    defaultSystemPrompt: SYSTEM_PROMPT, // "기본값 불러오기" 버튼용
+    modeRules: MODE_RULES, // 답변 모드별로 자동으로 덧붙는 규칙(읽기 전용 안내)
   }),
 );
 

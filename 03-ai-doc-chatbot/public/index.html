@@ -43,10 +43,18 @@
   <footer class="composer">
     <div class="inner">
       <form id="askForm">
+        <div class="ask-opts">
+          <select id="answerMode" title="답변 방식">
+            <option value="docs">📄 문서만</option>
+            <option value="mixed">📄+💡 문서 우선 + 일반 지식</option>
+            <option value="general">💡 일반 질문</option>
+          </select>
+          <label id="webWrap" class="web-toggle" title="웹 검색"><input id="webSearch" type="checkbox" /> 🌐 웹 검색</label>
+        </div>
         <textarea id="question" rows="1" placeholder="문서에 대해 물어보세요. 예) E-21 오류는 무엇인가요?" autofocus></textarea>
         <button id="sendBtn" class="primary" type="submit">보내기</button>
       </form>
-      <div class="hint">Enter 보내기 · Shift+Enter 줄바꿈 · 답변은 등록된 문서만 근거로 만듭니다.</div>
+      <div class="hint">Enter 보내기 · Shift+Enter 줄바꿈 · <span id="modeHint">답변은 등록된 문서만 근거로 만듭니다.</span></div>
     </div>
   </footer>
   </div>

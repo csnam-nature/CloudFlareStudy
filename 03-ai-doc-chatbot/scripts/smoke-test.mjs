@@ -43,17 +43,18 @@ async function waitIndexed(id, timeoutMs = 30000) {
 }
 
 /** WebSocket 으로 질문 하나를 보내고 done(또는 error)까지 받은 메시지를 돌려줍니다. */
-function ask(session, text, docId) {
+function ask(session, text, docId, opts = {}) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${BASE.replace(/^http/, "ws")}/agents/chat-agent/${session}`);
-    const got = { history: null, sources: null, answer: "", done: false, error: null, user: null };
+    const got = { history: null, sources: null, answer: "", done: false, error: null, user: null, notice: null };
     const timer = setTimeout(() => (ws.close(), reject(new Error("응답 시간 초과"))), 30000);
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.type === "history" && got.history === null) {
         got.history = m.messages;
-        ws.send(JSON.stringify({ type: "ask", text, docId }));
+        ws.send(JSON.stringify({ type: "ask", text, docId, ...opts }));
       } else if (m.type === "user") got.user = m.message;
+      else if (m.type === "notice") got.notice = m.message;
       else if (m.type === "sources") got.sources = m.sources;
       else if (m.type === "delta") got.answer += m.text;
       else if (m.type === "done" || m.type === "error") {
@@ -304,6 +305,21 @@ await new Promise((resolve) => {
   r = await capi(`/${convId}`, "DELETE");
   const h2 = await history(convId);
   check("대화 삭제: 목록과 기록 모두 지움", r.status === 200 && (await capi("")).data.conversations.length === 0 && h2.length === 0, `기록 ${h2.length}개`);
+}
+
+// 11. 답변 모드 (문서만 · 문서 우선 + 일반 지식 · 일반 질문) 와 웹 검색 요청
+{
+  const s11 = crypto.randomUUID();
+  const g = await ask(s11, "전기차 완속 충전과 급속 충전 차이는?", null, { mode: "general" });
+  check("일반 질문: 문서 검색 없이 답함", g.done && g.sources?.length === 0 && g.answer.includes("일반 질문"));
+  const mx = await ask(s11, "등록 문서에 전혀 없는 질문 zzqq", null, { mode: "mixed" });
+  check("문서 우선 + 일반 지식: 근거가 없으면 일반 정보 표시", mx.done && mx.answer.includes("※ 등록 문서에 없는 일반 정보입니다"));
+  const w = await ask(s11, "오늘 날씨", null, { mode: "general", web: true });
+  check("웹 검색 요청: 못 쓰면 이유를 알리고 답은 계속", w.done && /웹 검색 없이 답합니다/.test(w.notice ?? ""), w.notice ?? "");
+  const me = await (await fetch(`${BASE}/api/me`)).json();
+  check("/api/me 에 웹 검색 가능 여부", me.webSearch && me.webSearch.available === false && !!me.webSearch.reason);
+  const st = await (await fetch(`${BASE}/api/settings`, { headers: auth })).json();
+  check("설정 API 에 기본 프롬프트·모드 규칙", st.defaultSystemPrompt?.includes("네이처텍") && !!st.modeRules?.mixed && st.settings.allowWebSearch === true);
 }
 
 console.log(failed ? `\n${failed}개 실패` : "\n모두 통과");
