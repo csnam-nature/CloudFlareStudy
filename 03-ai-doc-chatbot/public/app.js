@@ -6,6 +6,7 @@
 // 서버 쪽 메시지 형식은 src/agent.ts 맨 위 주석에 있습니다.
 
 import { $, esc, showMode, toast } from "./common.js";
+import { blocksToHtml, exportItems, parseBlocks } from "./export.js";
 
 const SESSION_KEY = "docChatbotSession";
 let sessionId = localStorage.getItem(SESSION_KEY);
@@ -22,8 +23,10 @@ const sendBtn = $("#sendBtn");
 const conn = $("#conn");
 const docFilter = $("#docFilter");
 
-/** id → { el, content, sources } : 화면에 그린 답변들 */
+/** id → { el, content, sources, question } : 화면에 그린 답변들 (Map 은 넣은 순서를 유지 = 대화 순서) */
 const answers = new Map();
+let lastQuestion = ""; // 바로 앞 질문 (답변 저장 때 함께 넣음)
+let appTitle = "네이처텍 문서 챗봇";
 let ws;
 let retry = 0;
 let answering = false;
@@ -131,6 +134,7 @@ function showEmpty() {
 }
 
 function addUser(text) {
+  lastQuestion = text;
   const div = document.createElement("div");
   div.className = "msg user";
   div.innerHTML = `<div class="bubble">${esc(text)}</div>`;
@@ -142,7 +146,7 @@ function addAnswer(id, content, sources, typing) {
   div.className = "msg bot";
   div.innerHTML = `<div class="bubble"></div>`;
   list.append(div);
-  const a = { el: div.firstElementChild, content, sources };
+  const a = { el: div.firstElementChild, content, sources, question: lastQuestion };
   answers.set(id, a);
   renderAnswer(a, typing);
 }
@@ -160,8 +164,18 @@ function renderAnswer(a, typing) {
         )
         .join("")}</details>`
     : "";
+  // 다 만든 답변 아래에 저장 버튼 (MD · Word · PDF)
+  const save =
+    !typing && a.content
+      ? `<div class="save"><span class="muted">저장</span><button type="button" data-f="md">MD</button><button type="button" data-f="docx">Word</button><button type="button" data-f="pdf">PDF</button></div>`
+      : "";
   const open = a.el.querySelector("details")?.open;
-  a.el.innerHTML = `<div class="${typing ? "typing" : ""}">${body}</div>${src}`;
+  a.el.innerHTML = `<div class="${typing ? "typing" : ""}">${body}</div>${src}${save}`;
+  for (const b of a.el.querySelectorAll(".save button"))
+    b.onclick = () => {
+      exportItems(b.dataset.f, appTitle, [{ question: a.question, answer: a.content, sources: a.sources }]);
+      if (b.dataset.f === "pdf") toast('인쇄 창에서 대상(프린터)을 "PDF로 저장"으로 고르세요.');
+    };
   if (open) a.el.querySelector("details").open = true;
   // 본문의 [1] 을 누르면 근거 목록을 펼치고 해당 근거를 강조
   for (const c of a.el.querySelectorAll(".cite"))
@@ -176,32 +190,11 @@ function renderAnswer(a, typing) {
     };
 }
 
-/** 아주 작은 마크다운 변환: 문단, 목록, **굵게**, `코드`, [1] 근거 표시 */
+/** 답변 Markdown → HTML: 제목·문단·목록·표·**굵게**·`코드` (export.js 와 같은 변환) + [1] 근거 표시 */
 function formatAnswer(text, nSources) {
-  const inline = (s) =>
-    esc(s)
-      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      .replace(/\[(\d+)\]/g, (m, n) => (Number(n) >= 1 && Number(n) <= nSources ? `<span class="cite" data-n="${n}">${n}</span>` : m));
-  const out = [];
-  let listTag = null;
-  for (const line of text.split("\n")) {
-    const li = line.match(/^\s*(?:[-*•]|(\d+)[.)])\s+(.*)$/);
-    if (li) {
-      const tag = li[1] ? "ol" : "ul";
-      if (listTag !== tag) {
-        if (listTag) out.push(`</${listTag}>`);
-        out.push(`<${tag}>`);
-        listTag = tag;
-      }
-      out.push(`<li>${inline(li[2])}</li>`);
-      continue;
-    }
-    if (listTag) out.push(`</${listTag}>`), (listTag = null);
-    if (line.trim()) out.push(`<p>${inline(line.replace(/^#+\s*/, ""))}</p>`);
-  }
-  if (listTag) out.push(`</${listTag}>`);
-  return out.join("");
+  return blocksToHtml(parseBlocks(text)).replace(/\[(\d+)\]/g, (m, n) =>
+    Number(n) >= 1 && Number(n) <= nSources ? `<span class="cite" data-n="${n}">${n}</span>` : m,
+  );
 }
 
 function scrollDown(force = false) {
@@ -255,7 +248,17 @@ async function loadDocs() {
   }
 }
 
-showMode($("#mode"));
+showMode($("#mode")).then((me) => me?.appTitle && (appTitle = me.appTitle));
+
+// 대화 전체 저장
+$("#saveAll").addEventListener("change", (e) => {
+  const format = e.target.value;
+  e.target.value = "";
+  const items = [...answers.values()].filter((a) => a.content).map((a) => ({ question: a.question, answer: a.content, sources: a.sources }));
+  if (!items.length) return toast("저장할 답변이 없습니다.");
+  exportItems(format, appTitle, items);
+  if (format === "pdf") toast('인쇄 창에서 대상(프린터)을 "PDF로 저장"으로 고르세요.');
+});
 loadDocs();
 docFilter.addEventListener("focus", loadDocs);
 connect();

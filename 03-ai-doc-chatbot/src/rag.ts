@@ -5,15 +5,16 @@
 
 import { type ChatMessage, embed, queryVectors } from "./ai";
 import type { Bindings } from "./auth";
+import type { Settings } from "./settings";
 
 export type Source = { id: string; docId: number; docName: string; seq: number; score: number; text: string };
 
-const TOP_K = 5;
 // 이 점수보다 낮은 청크는 관련 없다고 보고 버립니다(코사인 유사도, 1에 가까울수록 비슷).
 // 진짜 모드(bge-m3)와 연습 모드(글자 해시)는 점수 분포가 달라 기준도 다르게 둡니다.
 // 단, 질문 단어가 그대로 들어 있는 조각(키워드 검색에 걸린 조각)은 이 기준과 상관없이 후보에 남깁니다.
-const MIN_SCORE = { real: 0.35, mock: 0.05 };
-// 벡터 검색에서 먼저 뽑는 후보 수. 여기서 키워드 점수를 더해 다시 줄을 세운 뒤 TOP_K 개만 씁니다.
+// 진짜 모드 기준은 관리 화면 설정(minScore, 기본 0.35), 연습 모드는 0.05 고정.
+const MOCK_MIN_SCORE = 0.05;
+// 벡터 검색에서 먼저 뽑는 후보 수. 여기서 키워드 점수를 더해 다시 줄을 세운 뒤 설정의 topK 개만 씁니다.
 const CANDIDATES = { real: 20, mock: 50 };
 // 키워드 검색으로 더하는 후보 수(단어마다)
 const KEYWORD_LIMIT = 20;
@@ -22,22 +23,23 @@ const KEYWORD_LIMIT = 20;
  * 하이브리드 검색 = 벡터 검색(뜻이 비슷한 조각) + 키워드 검색(질문 단어가 그대로 들어 있는 조각).
  *
  * 왜 키워드도 쓰나? "SK시그넷"처럼 짧은 회사명·모델명·코드만 물으면, 수십 행짜리 표 조각과의 벡터 유사도는
- * 낮게 나와(문장 뜻이 거의 없으므로) MIN_SCORE 아래로 떨어지기 쉽습니다. 그러면 근거가 0개가 되어
+ * 낮게 나와(문장 뜻이 거의 없으므로) 기준(minScore) 아래로 떨어지기 쉽습니다. 그러면 근거가 0개가 되어
  * 모델은 "등록된 문서에서 찾지 못했습니다"라고 답합니다. 이름·번호 같은 것은 글자 그대로 찾는 편이 정확합니다.
  */
-export async function retrieve(env: Bindings, question: string, mock: boolean, docId?: number): Promise<Source[]> {
+export async function retrieve(env: Bindings, s: Settings, question: string, mock: boolean, docId?: number): Promise<Source[]> {
+  const minScore = mock ? MOCK_MIN_SCORE : s.minScore;
   const mode = mock ? "mock" : "real";
   const words = queryWords(question);
   const [qvec] = await embed(env, [question]);
   const [vecMatches, keywordIds] = await Promise.all([
-    queryVectors(env, qvec, CANDIDATES[mode], docId),
+    queryVectors(env, qvec, Math.max(CANDIDATES[mode], s.topK * 2), docId),
     keywordSearch(env, words, docId),
   ]);
 
   const vecScore = new Map(vecMatches.map((m) => [m.id, m.score]));
-  const ids = new Set([...vecMatches.filter((m) => m.score >= MIN_SCORE[mode]).map((m) => m.id), ...keywordIds]);
+  const ids = new Set([...vecMatches.filter((m) => m.score >= minScore).map((m) => m.id), ...keywordIds]);
   if (!ids.size) {
-    console.log(`검색: 근거 없음 (벡터 최고 점수 ${vecMatches[0]?.score.toFixed(3) ?? "-"}, 기준 ${MIN_SCORE[mode]}, 키워드 ${JSON.stringify(words)})`);
+    console.log(`검색: 근거 없음 (벡터 최고 점수 ${vecMatches[0]?.score.toFixed(3) ?? "-"}, 기준 ${minScore}, 키워드 ${JSON.stringify(words)})`);
     return [];
   }
 
@@ -58,7 +60,7 @@ export async function retrieve(env: Bindings, question: string, mock: boolean, d
       return { id: r.id, docId: r.doc_id, docName: r.name, seq: r.seq, score: Math.round(score * 1000) / 1000, text: r.text };
     })
     .sort((a, b) => b.score - a.score)
-    .slice(0, TOP_K);
+    .slice(0, s.topK);
   console.log(`검색: ${sources.map((s) => `${s.docName}#${s.seq + 1}(${s.score}${vecScore.has(s.id) ? "" : ", 키워드"})`).join(", ")}`);
   return sources;
 }
@@ -98,7 +100,7 @@ function keywordBoost(text: string, words: string[]): number {
   return (0.5 * words.filter((w) => lower.includes(w)).length) / words.length;
 }
 
-const SYSTEM_PROMPT = `당신은 사내 문서를 근거로 답하는 도우미입니다.
+export const SYSTEM_PROMPT = `당신은 네이처텍 사내 문서를 근거로 답하는 도우미입니다.
 규칙:
 - 아래 [근거] 안의 내용만 사용해 한국어로 답하세요.
 - 근거에 답이 없으면 지어내지 말고 "등록된 문서에서 찾지 못했습니다."라고 답하세요.
@@ -108,12 +110,12 @@ const SYSTEM_PROMPT = `당신은 사내 문서를 근거로 답하는 도우미�
 - 짧고 정확하게, 필요하면 목록으로 정리하세요.`;
 
 /** LLM 에 보낼 메시지 목록: 시스템 규칙 + 최근 대화 몇 턴 + (근거 + 질문) */
-export function buildMessages(question: string, sources: Source[], history: ChatMessage[]): ChatMessage[] {
+export function buildMessages(question: string, sources: Source[], history: ChatMessage[], systemPrompt = ""): ChatMessage[] {
   const context = sources.length
     ? sources.map((s, i) => `[${i + 1}] (${s.docName}, 조각 ${s.seq + 1})\n${s.text}`).join("\n\n")
     : "(관련 근거를 찾지 못했습니다)";
   return [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt.trim() || SYSTEM_PROMPT },
     ...history,
     { role: "user", content: `[근거]\n${context}\n\n[질문]\n${question}` },
   ];
@@ -154,5 +156,7 @@ export function mockAnswer(question: string, sources: Source[]): string {
     const rows = lines.slice(2).filter((l) => hits(l) > 0);
     if (rows.length) text = [lines[0], lines[1], ...rows.slice(0, 15)].join("\n");
   }
-  return `(연습 모드: AI 가 답을 쓰지 않고, 가장 비슷한 근거 문단을 그대로 보여 줍니다)\n\n${text.replace(/^#+\s*/, "")} [${best.n}]`;
+  // 표는 끝에 근거 번호를 붙이면 표 줄이 깨지므로 다음 줄에 둡니다.
+  const cite = text.startsWith("|") ? `\n\n(근거 [${best.n}])` : ` [${best.n}]`;
+  return `(연습 모드: AI 가 답을 쓰지 않고, 가장 비슷한 근거 문단을 그대로 보여 줍니다)\n\n${text.replace(/^#+\s*/, "")}${cite}`;
 }

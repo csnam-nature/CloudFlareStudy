@@ -2,7 +2,7 @@
   "name": "ai-doc-chatbot",
   "version": "1.0.0",
   "private": true,
-  "description": "Workers AI + Vectorize + Queues + Agents SDK + AI Gateway 로 만드는 사내 문서 AI 챗봇 (학습용 미니 프로젝트 3)",
+  "description": "Workers AI + Vectorize + Queues + Agents SDK + AI Gateway 로 만드는 네이처텍 문서 챗봇 (학습용 미니 프로젝트 3)",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

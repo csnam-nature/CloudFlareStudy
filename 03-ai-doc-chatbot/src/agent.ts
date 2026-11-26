@@ -22,6 +22,7 @@ import { Agent, type Connection, type ConnectionContext, type WSMessage } from "
 import { type ChatMessage, streamChat } from "./ai";
 import { type Bindings, isMock } from "./auth";
 import { buildMessages, mockAnswer, retrieve, type Source } from "./rag";
+import { getSettings } from "./settings";
 
 type StoredMessage = {
   id: number;
@@ -101,7 +102,7 @@ export class ChatAgent extends Agent<Bindings> {
       const text = err instanceof Error ? err.message : String(err);
       // 모델 접근 불가(5018)·지원 종료(5028)·유료 플랜 필요(5035)는 설정으로 고칠 수 있으므로 방법을 덧붙입니다.
       const hint = /\b(5018|5028|5035)\b/.test(text)
-        ? ` (지금 모델 ${this.env.CHAT_MODEL} 을 쓸 수 없습니다. wrangler.jsonc 또는 .dev.vars 의 CHAT_MODEL 을 다른 모델로 바꾸고 다시 실행하세요)`
+        ? ` (지금 답변 모델을 쓸 수 없습니다. 문서 관리 화면의 "설정"에서 다른 모델을 고르고 [시험]으로 확인한 뒤 저장하세요)`
         : "";
       this.sendError(connection, `답변을 만들지 못했습니다: ${text}${hint}`);
     } finally {
@@ -128,7 +129,8 @@ export class ChatAgent extends Agent<Bindings> {
 
     // 1) 검색
     const mock = isMock(this.env);
-    const sources = await retrieve(this.env, question, mock, docId);
+    const settings = await getSettings(this.env);
+    const sources = await retrieve(this.env, settings, question, mock, docId);
     const shortSources = sources.map(shorten);
     this.current = { id, content: "", sources: shortSources };
     this.broadcast(JSON.stringify({ type: "sources", id, sources: shortSources }));
@@ -136,7 +138,7 @@ export class ChatAgent extends Agent<Bindings> {
     // 2) 생성 (스트리밍)
     let content = "";
     try {
-      for await (const piece of streamChat(this.env, buildMessages(question, sources, history), mockAnswer(question, sources))) {
+      for await (const piece of streamChat(this.env, settings, buildMessages(question, sources, history, settings.systemPrompt), mockAnswer(question, sources))) {
         content += piece;
         this.current.content = content;
         this.broadcast(JSON.stringify({ type: "delta", id, text: piece }));

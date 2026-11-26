@@ -7,7 +7,7 @@ Cloudflare 개발자 플랫폼을 미니 프로젝트로 익히는 학습 저장
 | --- | --- | --- | --- |
 | [01-url-shortener](./01-url-shortener) | URL 단축기 | Workers, KV, D1, Cron Triggers, Rate Limiting | 완료 |
 | 02-photo-gallery | 사진 갤러리 | Workers Static Assets, R2, D1, Images | 예정 |
-| [03-ai-doc-chatbot](./03-ai-doc-chatbot) | 사내 문서 AI 챗봇 | Workers AI, Vectorize, Queues, Agents SDK(Durable Objects), AI Gateway, Rate Limiting | 완료 |
+| [03-ai-doc-chatbot](./03-ai-doc-chatbot) | 네이처텍 문서 챗봇 | Workers AI, Vectorize, Queues, Agents SDK(Durable Objects), AI Gateway, Rate Limiting | 완료 |
 
 ## 공통 준비물
 

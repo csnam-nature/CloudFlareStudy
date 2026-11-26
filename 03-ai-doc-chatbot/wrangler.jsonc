@@ -1,5 +1,5 @@
 // Wrangler 설정 파일 (JSON + 주석 허용)
-// 사내 문서 AI 챗봇: 정적 화면(public/) + API(Hono) + 큐 소비자 + 채팅 에이전트(Durable Object)를 Worker 하나로 배포합니다.
+// 네이처텍 문서 챗봇: 정적 화면(public/) + API(Hono) + 큐 소비자 + 채팅 에이전트(Durable Object)를 Worker 하나로 배포합니다.
 //
 // 두 가지 실행 방법이 있습니다.
 //   npm run dev       진짜 AI 모드. Workers AI·Vectorize 는 로컬 흉내가 없어서 Cloudflare 계정의 실제 리소스를 씁니다(로그인 필요, 무료 한도 차감).

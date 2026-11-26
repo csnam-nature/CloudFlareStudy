@@ -184,3 +184,101 @@ $("#deleteAll").onclick = async () => {
 };
 checkToken();
 load();
+
+// ── 설정 ──────────────────────────────────────────────
+
+const form = $("#settingsForm");
+const CUSTOM = "__custom__";
+let settingsData = null;
+
+/** 모델 목록 + 지금 값이 목록에 없으면 "직접 입력" 을 고른 상태로 */
+function fillModelSelect(name, models, current) {
+  const sel = form.elements[`${name}Pick`];
+  const listed = models.some((m) => m.id === current);
+  sel.innerHTML =
+    models.map((m) => `<option value="${esc(m.id)}">${esc(m.id.replace(/^@cf\//, ""))} — ${esc(m.note)}</option>`).join("") +
+    `<option value="${CUSTOM}">직접 입력…</option>`;
+  sel.value = listed ? current : CUSTOM;
+  form.elements[`${name}Custom`].value = listed ? "" : current;
+  $(`#${name}CustomWrap`).hidden = listed;
+}
+const modelValue = (name) => {
+  const v = form.elements[`${name}Pick`].value;
+  return v === CUSTOM ? form.elements[`${name}Custom`].value.trim() : v;
+};
+for (const name of ["chatModel", "ocrModel"])
+  form.elements[`${name}Pick`].addEventListener("change", (e) => ($(`#${name}CustomWrap`).hidden = e.target.value !== CUSTOM));
+
+function showSettings(s) {
+  fillModelSelect("chatModel", settingsData.chatModels, s.chatModel);
+  fillModelSelect("ocrModel", settingsData.ocrModels, s.ocrModel);
+  for (const k of ["appTitle", "temperature", "maxTokens", "topK", "minScore", "chunkSize", "chunkOverlap", "maxChunksPerDoc", "systemPrompt"])
+    form.elements[k].value = s[k];
+  form.elements.thinking.checked = s.thinking;
+  form.elements.systemPrompt.placeholder = "(비워 두면 기본 규칙을 씁니다)";
+  $("#embedModel").textContent = settingsData.embedModel;
+  $("#testResult").textContent = "";
+}
+
+async function loadSettings() {
+  const res = await fetch("/api/settings", { headers: auth() });
+  if (!res.ok) {
+    form.hidden = true;
+    $("#settingsState").textContent = res.status === 401 ? "관리자 토큰이 필요합니다" : "불러오기 실패";
+    return;
+  }
+  settingsData = await res.json();
+  showSettings(settingsData.settings);
+  form.hidden = false;
+  $("#settingsState").textContent = settingsData.mock ? "연습 모드: 모델 설정은 npm run dev 에서 쓰입니다" : "";
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = form.elements;
+  const body = {
+    appTitle: f.appTitle.value,
+    chatModel: modelValue("chatModel"),
+    ocrModel: modelValue("ocrModel"),
+    thinking: f.thinking.checked,
+    temperature: Number(f.temperature.value),
+    maxTokens: Number(f.maxTokens.value),
+    topK: Number(f.topK.value),
+    minScore: Number(f.minScore.value),
+    chunkSize: Number(f.chunkSize.value),
+    chunkOverlap: Number(f.chunkOverlap.value),
+    maxChunksPerDoc: Number(f.maxChunksPerDoc.value),
+    systemPrompt: f.systemPrompt.value,
+  };
+  const res = await fetch("/api/settings", { method: "PUT", headers: { ...auth(), "content-type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return toast(`저장 실패: ${data.error ?? res.status}`);
+  showSettings(data.settings);
+  toast("설정을 저장했습니다");
+  checkToken(); // 위쪽 배지·제목 갱신
+});
+
+$("#resetSettings").addEventListener("click", async () => {
+  if (!confirm("설정을 모두 기본값(wrangler.jsonc 의 vars)으로 되돌릴까요?")) return;
+  const res = await fetch("/api/settings", { method: "DELETE", headers: auth() });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return toast(`실패: ${data.error ?? res.status}`);
+  showSettings(data.settings);
+  toast("기본값으로 되돌렸습니다");
+  checkToken();
+});
+
+$("#testModel").addEventListener("click", async () => {
+  const out = $("#testResult");
+  out.textContent = "시험 중…";
+  const res = await fetch("/api/settings/test", {
+    method: "POST",
+    headers: { ...auth(), "content-type": "application/json" },
+    body: JSON.stringify({ model: modelValue("chatModel") }),
+  });
+  const r = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
+  out.textContent = r.ok ? `✅ 사용 가능 (${r.ms}ms, 답: ${r.sample})` : `❌ ${r.error}`;
+});
+
+loadSettings();
+$("#tokenForm").addEventListener("submit", () => setTimeout(loadSettings, 300));

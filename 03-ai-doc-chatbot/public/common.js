@@ -30,6 +30,12 @@ export async function showMode(el, headers = {}) {
     el.textContent = me.mock ? "연습 모드 (가짜 AI)" : `${me.chatModel.split("/").pop()}${me.gateway ? " · AI Gateway" : ""}`;
     el.title = me.mock ? "MOCK_AI=1: 로그인 없이 흐름만 확인하는 모드입니다." : `답변 ${me.chatModel} / 임베딩 ${me.embedModel}`;
     el.classList.toggle("mock", me.mock);
+    // 화면 제목(관리 화면 설정의 "화면 제목")
+    if (me.appTitle) {
+      const t = $("#appTitle");
+      if (t) t.textContent = me.appTitle;
+      document.title = document.title.replace(/[^·]*$/, (m) => (document.title.includes("·") ? ` ${me.appTitle}` : me.appTitle));
+    }
     return me;
   } catch {
     el.textContent = "서버 확인 실패";
