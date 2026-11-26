@@ -31,6 +31,8 @@ let answering = false;
 let currentId = null; // 열린 대화 id (null = 아직 질문 전인 새 대화)
 let newFolderId = null; // 새 대화를 시작한 폴더
 let pendingAsk = null; // 새 대화: 연결되면 보낼 첫 질문
+let viewSeq = 0; // 대화를 바꿀 때마다 1씩 늘림(늦게 끝난 새 대화 등록이 화면을 덮어쓰지 않게)
+const queuedAsks = new Map(); // 등록 중에 다른 대화로 옮겨 가 못 보낸 첫 질문 (대화 id → 질문)
 
 // ── 연결 ──────────────────────────────────────────────
 
@@ -83,8 +85,10 @@ function resetView() {
 
 function openConversation(id) {
   if (id === currentId) return closeSidebarOnMobile();
+  viewSeq++;
   currentId = id;
-  pendingAsk = null;
+  pendingAsk = queuedAsks.get(id) ?? null; // 등록만 되고 못 보낸 첫 질문이 있으면 열 때 보냅니다.
+  queuedAsks.delete(id);
   localStorage.setItem(CURRENT_KEY, id);
   resetView();
   list.innerHTML = '<div class="empty"><p>불러오는 중…</p></div>';
@@ -96,6 +100,7 @@ function openConversation(id) {
 /** 새 대화 (folderId 폴더 안에서). 첫 질문을 보낼 때 목록에 등록됩니다. */
 function newConversation(folderId = null) {
   if (ws) (ws.onclose = null), ws.close(), (ws = null);
+  viewSeq++;
   currentId = null;
   newFolderId = folderId;
   pendingAsk = null;
@@ -117,7 +122,18 @@ function closeSidebarOnMobile() {
 const sidebar = createSidebar({
   onOpen: openConversation,
   onNew: newConversation,
-  onDeleted: (id) => id === currentId && newConversation(null),
+  onDeleted: (id) => {
+    queuedAsks.delete(id);
+    if (id === currentId) newConversation(null);
+  },
+  // 새 대화를 시작한 폴더가 지워지면 폴더 없이 이어서 쓰도록 합니다.
+  onFolderDeleted: (folderId) => {
+    if (currentId === null && newFolderId === folderId) {
+      newFolderId = null;
+      const note = list.querySelector(".folder-note");
+      if (note) note.hidden = true;
+    }
+  },
 });
 
 function send(obj) {
@@ -278,14 +294,18 @@ form.addEventListener("submit", async (e) => {
 
   // 새 대화: 목록에 등록(제목 = 첫 질문)한 뒤 연결하고, 연결되면 질문을 보냅니다.
   const id = crypto.randomUUID();
+  const seq = viewSeq;
   setAnswering(true);
   try {
     await sidebar.create(id, newFolderId, text);
   } catch (err) {
+    if (seq !== viewSeq) return toast(`대화를 만들지 못했습니다: ${err.message}`);
     setAnswering(false);
     input.value = text;
     return toast(`대화를 만들지 못했습니다: ${err.message}`);
   }
+  // 등록을 기다리는 사이 다른 대화로 옮겨 갔으면 화면은 그대로 두고, 그 대화를 열 때 질문을 보냅니다.
+  if (seq !== viewSeq) return queuedAsks.set(id, ask), sidebar.touch(id);
   currentId = id;
   localStorage.setItem(CURRENT_KEY, id);
   sidebar.setActive(id);

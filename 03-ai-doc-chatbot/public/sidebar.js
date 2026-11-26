@@ -218,6 +218,7 @@ export function createSidebar(handlers) {
       if (pendingFolder === f.id) pendingFolder = null;
       render();
       for (const id of removed) handlers.onDeleted(id);
+      handlers.onFolderDeleted?.(f.id);
     } catch (e) {
       toast(e.message);
     }
