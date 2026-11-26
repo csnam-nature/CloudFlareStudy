@@ -147,9 +147,9 @@ export class ChatAgent extends Agent<Bindings> {
       this.sql`UPDATE messages SET content = ${content || "(답변을 만들지 못했습니다)"}, sources = ${JSON.stringify(shortSources)}
         WHERE id = ${id}`;
       this.sql`DELETE FROM messages WHERE id <= (SELECT MAX(id) FROM messages) - ${KEEP_MESSAGES}`;
+      // 끝날 때(실패해도) 전체 내용을 보내, 중간 조각을 놓친 화면이나 다른 탭도 말풍선을 마무리할 수 있게 합니다.
+      this.broadcast(JSON.stringify({ type: "done", id, content: content || "(답변을 만들지 못했습니다)", sources: shortSources }));
     }
-    // 끝날 때 전체 내용도 함께 보내, 중간 조각을 놓친 화면도 완성된 답을 그릴 수 있게 합니다.
-    this.broadcast(JSON.stringify({ type: "done", id, content, sources: shortSources }));
   }
 
   private sendError(connection: Connection, message: string) {

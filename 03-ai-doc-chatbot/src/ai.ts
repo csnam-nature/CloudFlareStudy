@@ -169,16 +169,50 @@ export async function* streamChat(env: Bindings, messages: ChatMessage[], mockAn
     return;
   }
 
+  // 생각(reasoning) 모드가 있는 모델은 기본으로 켜져 있어, 답을 쓰기 전에 생각에 토큰을 다 써 버리면 본문이 비어 옵니다.
+  // 문서 근거 답변에는 생각 과정이 필요 없으므로 끕니다(gemma-4 등: chat_template_kwargs.enable_thinking).
+  const thinking = /gemma-4|qwen3|glm-4\.7/.test(env.CHAT_MODEL) ? { chat_template_kwargs: { enable_thinking: false } } : {};
   const stream = (await runAi(env, env.CHAT_MODEL, {
     messages,
     stream: true,
-    max_tokens: 1024, // 답변 길이 상한 = Neurons 사용량 상한
+    max_tokens: 1536, // 답변 길이 상한 = Neurons 사용량 상한
     temperature: 0.2, // 문서 근거 답변이라 창의성보다 일관성
+    ...thinking,
   })) as ReadableStream<Uint8Array>;
 
   const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
   let buf = "";
-  for (;;) {
+  let yielded = 0; // 본문 글자 수
+  let reasoning = 0; // 생각(reasoning) 글자 수
+  let finish: string | undefined;
+  let logged = 0;
+  const handle = function* (line: string): Generator<string, boolean> {
+    if (!line.startsWith("data:")) return false;
+    const data = line.slice(5).trim();
+    if (data === "[DONE]") return true;
+    // 모델마다 형식이 달라 처음 몇 줄은 터미널(wrangler dev)에 찍어 둡니다. 형식이 바뀌었을 때 원인을 찾기 쉽습니다.
+    if (logged++ < 3) console.log("LLM 스트림 예시:", data.slice(0, 300));
+    try {
+      const j = JSON.parse(data) as {
+        response?: string;
+        choices?: { delta?: { content?: string | null; reasoning_content?: string; reasoning?: string }; finish_reason?: string | null }[];
+      };
+      const c = j.choices?.[0];
+      // Workers AI 고유 형식(response) 또는 OpenAI 호환 형식(choices[0].delta.content)
+      const piece = j.response || c?.delta?.content || "";
+      reasoning += (c?.delta?.reasoning_content ?? c?.delta?.reasoning ?? "").length;
+      if (c?.finish_reason) finish = c.finish_reason;
+      if (piece) {
+        yielded += piece.length;
+        yield piece;
+      }
+    } catch {
+      // 형식이 다른 줄(사용량 정보 등)은 건너뜁니다.
+    }
+    return false;
+  };
+
+  outer: for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
     buf += value;
@@ -186,16 +220,17 @@ export async function* streamChat(env: Bindings, messages: ChatMessage[], mockAn
     while ((nl = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (data === "[DONE]") return;
-      try {
-        const j = JSON.parse(data) as { response?: string; choices?: { delta?: { content?: string } }[] };
-        const piece = j.response ?? j.choices?.[0]?.delta?.content;
-        if (piece) yield piece;
-      } catch {
-        // 형식이 다른 줄(사용량 정보 등)은 건너뜁니다.
-      }
+      if (yield* handle(line)) break outer;
     }
+  }
+  if (buf.trim()) yield* handle(buf.trim());
+
+  // 본문이 하나도 안 왔으면 빈 말풍선 대신 이유를 알려 줍니다.
+  if (!yielded) {
+    throw new Error(
+      reasoning
+        ? `모델이 생각(reasoning)만 하고 답을 쓰지 못했습니다(finish_reason=${finish ?? "?"}). 다른 CHAT_MODEL 을 써 보세요.`
+        : `모델이 빈 답변을 돌려주었습니다(finish_reason=${finish ?? "?"}). wrangler dev 터미널의 "LLM 스트림 예시" 로그를 확인하세요.`,
+    );
   }
 }
