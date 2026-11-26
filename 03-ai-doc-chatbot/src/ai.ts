@@ -4,6 +4,7 @@
 //   진짜 AI   : env.AI(Workers AI, AI Gateway 경유) + env.VECTORS(Vectorize)
 //   연습 모드 : 글자 조각 해시로 만든 가짜 벡터 + D1 mock_vectors 테이블 + "근거를 그대로 보여 주는" 가짜 답변
 
+import { explainExternalError, providerOf, streamExternal } from "./providers";
 import { type Bindings, isMock } from "./auth";
 import { hwpxToMarkdown } from "./hwpx";
 import { type Settings, supportsThinkingSwitch } from "./settings";
@@ -263,6 +264,16 @@ export async function* streamChat(env: Bindings, s: Settings, messages: ChatMess
     for (const word of mockAnswer.split(/(?<=\s)/)) {
       await new Promise((r) => setTimeout(r, 15));
       yield word;
+    }
+    return;
+  }
+
+  // OpenAI·Claude 를 고른 경우(모델 이름이 openai/… anthropic/…)
+  if (providerOf(s.chatModel) !== "workers-ai") {
+    try {
+      yield* streamExternal(env, s, messages);
+    } catch (e) {
+      throw new Error(explainExternalError(e));
     }
     return;
   }

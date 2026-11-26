@@ -11,6 +11,11 @@ import type { Context, MiddlewareHandler } from "hono";
 export type Bindings = Env & {
   /** 관리자 토큰. 로컬은 .dev.vars, 배포는 `wrangler secret put ADMIN_TOKEN` */
   ADMIN_TOKEN?: string;
+  /** 외부 AI 키(선택). 설정에서 OpenAI·Claude 모델을 고를 때만 필요합니다. src/providers.ts 참고 */
+  OPENAI_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
+  /** 인증을 켠 AI Gateway 의 토큰(선택) */
+  CF_AIG_TOKEN?: string;
 };
 
 export type AppEnv = { Bindings: Bindings };

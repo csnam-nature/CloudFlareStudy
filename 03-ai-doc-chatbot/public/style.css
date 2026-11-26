@@ -14,6 +14,7 @@
   --radius: 10px;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* display 를 정한 요소도 hidden 속성이면 숨김 */
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -218,3 +219,8 @@ table.docs .actions a { border: 1px solid var(--line); border-radius: 8px; text-
 @media (max-width: 800px) {
   #sidebar { position: fixed; z-index: 15; top: 0; bottom: 0; left: 0; box-shadow: 4px 0 20px rgba(0,0,0,.15); }
 }
+
+/* 설정 화면: 외부 AI 연결 상태 */
+.ext-status { display: grid; gap: 4px; margin: 4px 0 8px; }
+.settings details { margin: 6px 0; }
+.settings details pre { background: #f6f7f9; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 13px; overflow-x: auto; }

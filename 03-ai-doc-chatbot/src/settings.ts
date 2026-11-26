@@ -5,6 +5,7 @@
 // 저장한 값은 다음 요청부터 바로 쓰입니다(색인 관련 값은 다음에 올리거나 "다시 색인"하는 문서부터).
 
 import { Hono } from "hono";
+import { explainExternalError, keyStatus, providerOf, testExternal } from "./providers";
 import { type AppEnv, type Bindings, isMock, nowSec, requireAdmin } from "./auth";
 
 export type Settings = {
@@ -34,6 +35,13 @@ export const CHAT_MODELS = [
   { id: "@cf/zai-org/glm-5.3", note: "최상위급 · 느리고 Neurons 많이 씀" },
   { id: "@cf/deepseek-ai/deepseek-v4.1-flash-1017", note: "최상위급 · 긴 문맥" },
   { id: "@cf/meta/llama-3.1-8b-instruct-fast", note: "아주 빠름 · 한국어 약함" },
+  // 외부 AI (API 키 필요, 사용한 만큼 해당 회사에 요금. 질문과 문서 조각이 그 회사로 보내짐)
+  { id: "anthropic/claude-opus-5-5", note: "Claude 최상위 · 정확 · 비쌈", provider: "anthropic" },
+  { id: "anthropic/claude-sonnet-5-5", note: "Claude 균형 · 추천", provider: "anthropic" },
+  { id: "anthropic/claude-haiku-5-5", note: "Claude 빠르고 저렴", provider: "anthropic" },
+  { id: "openai/gpt-6.2-sol", note: "OpenAI 최신 주력", provider: "openai" },
+  { id: "openai/gpt-6.1-terra", note: "OpenAI 균형 · 저렴", provider: "openai" },
+  { id: "openai/gpt-6-luna", note: "OpenAI 아주 저렴 · 빠름", provider: "openai" },
 ];
 export const OCR_MODELS = [
   { id: "@cf/google/gemma-4-26b-a4b-it", note: "기본 · 이미지 입력 · 한국어 OCR" },
@@ -81,8 +89,10 @@ function clean(key: keyof Settings, v: unknown): Settings[keyof Settings] {
   }
   if (key === "thinking") return v === true || v === "true";
   const s = String(v ?? "").trim();
+  if (key === "chatModel" && /^(openai|anthropic)\/[\w.:-]+$/.test(s)) return s; // 외부 AI (src/providers.ts)
   if (key === "chatModel" || key === "ocrModel") {
-    if (!/^@[\w-]+\/[\w.-]+\/[\w.:-]+$/.test(s)) throw new Error(`${key} 는 "@cf/회사/모델" 형식이어야 합니다.`);
+    if (!/^@[\w-]+\/[\w.-]+\/[\w.:-]+$/.test(s))
+      throw new Error(key === "chatModel" ? `답변 모델은 "@cf/회사/모델", "openai/모델", "anthropic/모델" 중 한 형식이어야 합니다.` : `${key} 는 "@cf/회사/모델" 형식이어야 합니다.`);
     return s;
   }
   if (key === "appTitle") {
@@ -128,6 +138,7 @@ settingsApi.get("/", requireAdmin, async (c) =>
     ocrModels: OCR_MODELS,
     embedModel: c.env.EMBED_MODEL,
     mock: isMock(c.env),
+    external: keyStatus(c.env), // 외부 AI 키가 들어 있는지(값은 보내지 않음)
   }),
 );
 
@@ -166,8 +177,10 @@ settingsApi.delete("/", requireAdmin, async (c) => {
 
 // 모델 시험: 짧은 질문 하나를 보내 이 계정에서 쓸 수 있는지 확인합니다(5018 접근 불가·5028 지원 종료·5035 유료 필요 등).
 settingsApi.post("/test", requireAdmin, async (c) => {
-  if (isMock(c.env)) return c.json({ ok: false, error: "연습 모드에는 AI 가 없어 시험할 수 없습니다. npm run dev 에서 시험하세요." });
   const { model } = ((await c.req.json().catch(() => ({}))) ?? {}) as { model?: string };
+  // 외부 AI(OpenAI·Claude)는 연습 모드에서도 키만 있으면 시험할 수 있습니다.
+  if (isMock(c.env) && providerOf(String(model ?? "")) === "workers-ai")
+    return c.json({ ok: false, error: "연습 모드에는 Workers AI 가 없어 시험할 수 없습니다. npm run dev 에서 시험하세요." });
   let id: string;
   try {
     id = clean("chatModel", model) as string;
@@ -175,6 +188,14 @@ settingsApi.post("/test", requireAdmin, async (c) => {
     return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 400);
   }
   const started = Date.now();
+  if (providerOf(id) !== "workers-ai") {
+    try {
+      const text = (await testExternal(c.env, id)).trim();
+      return c.json({ ok: true, ms: Date.now() - started, sample: text.slice(0, 80) || "(빈 답)" });
+    } catch (e) {
+      return c.json({ ok: false, error: explainExternalError(e) });
+    }
+  }
   try {
     const ai = c.env.AI as unknown as { run(m: string, i: object): Promise<unknown> };
     const res = (await ai.run(id, {

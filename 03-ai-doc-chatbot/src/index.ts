@@ -11,7 +11,7 @@
 //   /api/conversations/...       대화 목록·폴더(왼쪽 사이드바) → src/conversations.ts
 //   /api/settings                관리 화면 설정(모델·검색·청크) → src/settings.ts
 //   /api/me                      관리자 토큰 확인·현재 모드·화면 제목
-//   그 밖의 경로                  public/ 정적 화면(index.html 채팅, admin.html 문서 관리)
+//   그 밖의 경로                  public/ 정적 화면(index.html 채팅, admin.html 문서 관리, settings.html 설정)
 
 import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
