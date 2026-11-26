@@ -1,19 +1,17 @@
 // 채팅 화면
 //
-// 1. 브라우저마다 세션 id 를 하나 만들어 localStorage 에 둡니다. 이 id 가 곧 ChatAgent 인스턴스 이름입니다.
-// 2. ws(s)://<호스트>/agents/chat-agent/<세션id> 로 WebSocket 을 엽니다.
+// 1. 대화마다 UUID 가 있고, 이 id 가 곧 ChatAgent 인스턴스 이름입니다. 대화 목록·폴더는 왼쪽 사이드바(sidebar.js)가 다룹니다.
+// 2. 대화를 열면 ws(s)://<호스트>/agents/chat-agent/<대화id> 로 WebSocket 을 엽니다. 다른 대화를 열면 연결을 바꿉니다.
 // 3. 질문을 { type: "ask" } 로 보내고, 서버가 보내는 start → sources → delta… → done 을 받아 화면에 그립니다.
+//    새 대화는 첫 질문을 보낼 때 목록에 등록되고(제목 = 첫 질문), 그다음 연결해서 질문을 보냅니다.
 // 서버 쪽 메시지 형식은 src/agent.ts 맨 위 주석에 있습니다.
 
 import { $, esc, showMode, toast } from "./common.js";
 import { blocksToHtml, exportItems, parseBlocks } from "./export.js";
+import { createSidebar } from "./sidebar.js";
 
-const SESSION_KEY = "docChatbotSession";
-let sessionId = localStorage.getItem(SESSION_KEY);
-if (!sessionId) {
-  sessionId = crypto.randomUUID();
-  localStorage.setItem(SESSION_KEY, sessionId);
-}
+const OLD_SESSION_KEY = "docChatbotSession"; // 폴더 기능 전의 "브라우저당 대화 하나" id
+const CURRENT_KEY = "docChatbotCurrent"; // 마지막으로 연 대화
 
 const list = $("#list");
 const scroller = $("#messages");
@@ -30,22 +28,34 @@ let appTitle = "네이처텍 문서 챗봇";
 let ws;
 let retry = 0;
 let answering = false;
+let currentId = null; // 열린 대화 id (null = 아직 질문 전인 새 대화)
+let newFolderId = null; // 새 대화를 시작한 폴더
+let pendingAsk = null; // 새 대화: 연결되면 보낼 첫 질문
 
 // ── 연결 ──────────────────────────────────────────────
 
-function connect() {
+/** 대화 id 로 연결. 다른 대화로 바꾸면 이전 연결은 닫고 다시 연결하지 않습니다. */
+function connect(id) {
+  if (ws) {
+    ws.onclose = null;
+    ws.close();
+  }
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/agents/chat-agent/${sessionId}`);
-  ws.onopen = () => {
+  const sock = new WebSocket(`${proto}://${location.host}/agents/chat-agent/${id}`);
+  ws = sock;
+  sock.onopen = () => {
     retry = 0;
     setConn(true);
+    if (pendingAsk) send(pendingAsk), (pendingAsk = null);
   };
-  ws.onclose = () => {
+  sock.onclose = () => {
+    if (ws !== sock) return;
     setConn(false);
     // 끊기면 1초, 2초, 4초… 최대 15초 간격으로 다시 연결
-    setTimeout(connect, Math.min(15000, 1000 * 2 ** retry++));
+    setTimeout(() => ws === sock && currentId === id && connect(id), Math.min(15000, 1000 * 2 ** retry++));
   };
-  ws.onmessage = (e) => {
+  sock.onmessage = (e) => {
+    if (ws !== sock) return;
     let m;
     try {
       m = JSON.parse(e.data);
@@ -62,8 +72,57 @@ function setConn(on) {
   sendBtn.disabled = !on || answering;
 }
 
+// ── 대화 열기 · 새 대화 ────────────────────────────────
+
+function resetView() {
+  list.innerHTML = "";
+  answers.clear();
+  lastQuestion = "";
+  setAnswering(false);
+}
+
+function openConversation(id) {
+  if (id === currentId) return closeSidebarOnMobile();
+  currentId = id;
+  pendingAsk = null;
+  localStorage.setItem(CURRENT_KEY, id);
+  resetView();
+  list.innerHTML = '<div class="empty"><p>불러오는 중…</p></div>';
+  sidebar.setActive(id);
+  connect(id);
+  closeSidebarOnMobile();
+}
+
+/** 새 대화 (folderId 폴더 안에서). 첫 질문을 보낼 때 목록에 등록됩니다. */
+function newConversation(folderId = null) {
+  if (ws) (ws.onclose = null), ws.close(), (ws = null);
+  currentId = null;
+  newFolderId = folderId;
+  pendingAsk = null;
+  localStorage.removeItem(CURRENT_KEY);
+  resetView();
+  showEmpty();
+  conn.textContent = "● 새 대화";
+  conn.classList.remove("off");
+  sendBtn.disabled = false;
+  sidebar.setActive(null, folderId);
+  closeSidebarOnMobile();
+  input.focus();
+}
+
+function closeSidebarOnMobile() {
+  if (matchMedia("(max-width: 800px)").matches) $("#sidebar").classList.add("hidden");
+}
+
+const sidebar = createSidebar({
+  onOpen: openConversation,
+  onNew: newConversation,
+  onDeleted: (id) => id === currentId && newConversation(null),
+});
+
 function send(obj) {
   if (ws?.readyState !== WebSocket.OPEN) return toast("서버에 연결되지 않았습니다.");
+  if (obj.type === "ask" && currentId) sidebar.touch(currentId);
   ws.send(JSON.stringify(obj));
 }
 
@@ -126,6 +185,10 @@ function setAnswering(on) {
 
 function showEmpty() {
   list.append($("#emptyTpl").content.cloneNode(true));
+  // 폴더 안에서 시작한 새 대화면 어느 폴더인지 알려 줍니다.
+  const fname = currentId === null && newFolderId != null ? sidebar.folderName(newFolderId) : null;
+  const note = list.querySelector(".folder-note");
+  if (note && fname) (note.hidden = false), (note.textContent = `📁 ${fname} 폴더에 새 대화를 만듭니다`);
   for (const b of list.querySelectorAll(".examples button"))
     b.onclick = () => {
       input.value = b.textContent;
@@ -204,13 +267,30 @@ function scrollDown(force = false) {
 
 // ── 입력 ──────────────────────────────────────────────
 
-form.addEventListener("submit", (e) => {
+form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text || answering) return;
-  send({ type: "ask", text, docId: docFilter.value ? Number(docFilter.value) : null });
+  const ask = { type: "ask", text, docId: docFilter.value ? Number(docFilter.value) : null };
   input.value = "";
   autoGrow();
+  if (currentId) return send(ask);
+
+  // 새 대화: 목록에 등록(제목 = 첫 질문)한 뒤 연결하고, 연결되면 질문을 보냅니다.
+  const id = crypto.randomUUID();
+  setAnswering(true);
+  try {
+    await sidebar.create(id, newFolderId, text);
+  } catch (err) {
+    setAnswering(false);
+    input.value = text;
+    return toast(`대화를 만들지 못했습니다: ${err.message}`);
+  }
+  currentId = id;
+  localStorage.setItem(CURRENT_KEY, id);
+  sidebar.setActive(id);
+  pendingAsk = ask;
+  connect(id);
 });
 
 input.addEventListener("keydown", (e) => {
@@ -227,9 +307,7 @@ function autoGrow() {
 }
 input.addEventListener("input", autoGrow);
 
-$("#resetBtn").onclick = () => {
-  if (confirm("대화 기록을 지우고 새로 시작할까요?")) send({ type: "reset" });
-};
+$("#sideToggle").onclick = () => $("#sidebar").classList.toggle("hidden");
 
 // 검색 범위: 색인이 끝난 문서만 고를 수 있습니다.
 async function loadDocs() {
@@ -261,4 +339,24 @@ $("#saveAll").addEventListener("change", (e) => {
 });
 loadDocs();
 docFilter.addEventListener("focus", loadDocs);
-connect();
+closeSidebarOnMobile();
+start();
+
+/** 처음 열 때: 목록을 읽고, 마지막에 보던 대화(없으면 가장 최근 대화, 그것도 없으면 새 대화)를 엽니다. */
+async function start() {
+  await sidebar.load();
+  // 폴더 기능 전에 쓰던 "브라우저당 대화 하나"가 있으면 목록에 "이전 대화"로 한 번 넣어 줍니다.
+  const old = localStorage.getItem(OLD_SESSION_KEY);
+  if (old) {
+    try {
+      if (!sidebar.has(old)) await sidebar.create(old, null, "이전 대화");
+      localStorage.removeItem(OLD_SESSION_KEY);
+    } catch {
+      /* 다음에 다시 시도 */
+    }
+  }
+  const last = localStorage.getItem(CURRENT_KEY);
+  const id = last && sidebar.has(last) ? last : sidebar.mostRecent();
+  if (id) openConversation(id);
+  else newConversation(null);
+}

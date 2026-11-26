@@ -8,6 +8,7 @@
 // 요청 경로
 //   /agents/chat-agent/<세션id>  채팅 WebSocket   → routeAgentRequest 가 ChatAgent 인스턴스로 연결
 //   /api/documents/...           문서 API         → src/documents.ts
+//   /api/conversations/...       대화 목록·폴더(왼쪽 사이드바) → src/conversations.ts
 //   /api/settings                관리 화면 설정(모델·검색·청크) → src/settings.ts
 //   /api/me                      관리자 토큰 확인·현재 모드·화면 제목
 //   그 밖의 경로                  public/ 정적 화면(index.html 채팅, admin.html 문서 관리)
@@ -15,6 +16,7 @@
 import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
 import { type AppEnv, type Bindings, type IndexJob, isAdmin, isMock } from "./auth";
+import { conversations } from "./conversations";
 import { documents } from "./documents";
 import { handleIndexBatch } from "./indexer";
 import { getSettings, settingsApi } from "./settings";
@@ -25,6 +27,7 @@ const app = new Hono<AppEnv>();
 
 app.route("/api/documents", documents);
 app.route("/api/settings", settingsApi);
+app.route("/api/conversations", conversations);
 
 app.get("/api/me", async (c) => {
   const s = await getSettings(c.env);

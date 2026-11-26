@@ -1,11 +1,12 @@
 // 채팅 에이전트 (Agents SDK)
 //
 // Agent 클래스는 Durable Object 위에 만들어진 "상태를 가진 작은 서버"입니다.
-//   - 이름(name)마다 인스턴스가 딱 하나 생깁니다. 브라우저가 만든 세션 id 를 이름으로 써서 "브라우저마다 내 대화방"이 됩니다.
+//   - 이름(name)마다 인스턴스가 딱 하나 생깁니다. 대화 id(UUID)를 이름으로 써서 "대화 하나 = 인스턴스 하나"가 됩니다.
+//     대화 목록·폴더(제목, 어느 폴더인지)는 D1 conversations·folders 표에 따로 있습니다(src/conversations.ts).
 //   - this.sql 로 인스턴스 전용 SQLite 에 대화 기록을 저장하므로, 새로고침하거나 다음 날 와도 대화가 남아 있습니다.
 //   - WebSocket 연결을 직접 받아 답변을 조각조각 실시간으로 보낼 수 있습니다.
 //
-// 브라우저는 ws(s)://<호스트>/agents/chat-agent/<세션id> 로 연결합니다. (클래스 이름 ChatAgent → 경로 chat-agent)
+// 브라우저는 ws(s)://<호스트>/agents/chat-agent/<대화id> 로 연결합니다. (클래스 이름 ChatAgent → 경로 chat-agent)
 // React 없이 순수 WebSocket 으로 쓰려고, 메시지 형식을 아래처럼 직접 정했습니다.
 //
 //   브라우저 → 서버  { type: "ask", text, docId? }   질문
@@ -50,6 +51,12 @@ export class ChatAgent extends Agent<Bindings> {
       sources    TEXT,
       created_at INTEGER NOT NULL
     )`;
+  }
+
+  /** 대화 삭제 때 API(src/conversations.ts)가 RPC 로 부릅니다. */
+  async clearHistory() {
+    this.sql`DELETE FROM messages`;
+    this.broadcast(JSON.stringify({ type: "history", messages: [] }));
   }
 
   // Agents SDK 는 연결 직후 상태 동기화용 "프로토콜 메시지"를 보냅니다. 우리 화면은 쓰지 않으므로 끕니다.
@@ -120,6 +127,8 @@ export class ChatAgent extends Agent<Bindings> {
     const [user] = this.sql<StoredMessage>`INSERT INTO messages (role, content, created_at)
       VALUES ('user', ${question}, ${now}) RETURNING *`;
     this.broadcast(JSON.stringify({ type: "user", message: toClient(user) }));
+    // 대화 목록의 "최근 순" 정렬용 시각 갱신 (목록에 없는 대화면 아무 일도 없음)
+    await this.env.DB.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").bind(now, this.name).run().catch(() => {});
 
     // 답변 자리를 먼저 만들고(id 확보), 다 만들어지면 내용을 채웁니다.
     const [draft] = this.sql<StoredMessage>`INSERT INTO messages (role, content, created_at)
