@@ -5,6 +5,7 @@
 //   연습 모드 : 글자 조각 해시로 만든 가짜 벡터 + D1 mock_vectors 테이블 + "근거를 그대로 보여 주는" 가짜 답변
 
 import { type Bindings, isMock } from "./auth";
+import { hwpxToMarkdown } from "./hwpx";
 
 // ── 공통: Workers AI 호출 ─────────────────────────────────────
 
@@ -26,13 +27,13 @@ function runAi(env: Bindings, model: string, input: object): Promise<unknown> {
 // ── 1. 문서 → 텍스트 ─────────────────────────────────────────
 
 export const IMAGE_EXT = ["jpg", "jpeg", "png", "webp"] as const;
-export const SUPPORTED_EXT = ["pdf", "docx", "xlsx", "xlsm", "xls", "csv", "txt", "md", ...IMAGE_EXT] as const;
+export const SUPPORTED_EXT = ["pdf", "docx", "hwpx", "xlsx", "xlsm", "xls", "csv", "txt", "md", ...IMAGE_EXT] as const;
 export const isImageExt = (ext: string) => (IMAGE_EXT as readonly string[]).includes(ext);
 export const extOf = (filename: string) => filename.split(".").pop()?.toLowerCase() ?? "";
 
 /**
  * 원본 파일에서 텍스트를 꺼냅니다.
- * TXT·MD 는 그대로 읽고, CSV 는 직접 Markdown 표로 바꿉니다(AI 불필요).
+ * TXT·MD 는 그대로 읽고, CSV 는 직접 Markdown 표로, HWPX(한글)는 ZIP 속 XML 을 직접 읽어 Markdown 으로 바꿉니다(AI 불필요).
  * PDF·DOCX·엑셀(XLSX·XLSM·XLS)은 Workers AI 의 Markdown 변환(toMarkdown, 현재 베타)을 씁니다. 엑셀은 시트가 표로 바뀝니다.
  * toMarkdown 은 Neurons 를 쓰지 않는 변환 기능입니다(이미지 설명 생성 제외).
  */
@@ -40,10 +41,11 @@ export async function extractText(env: Bindings, filename: string, bytes: ArrayB
   const ext = extOf(filename);
   if (ext === "txt" || ext === "md") return new TextDecoder("utf-8").decode(bytes);
   if (ext === "csv") return csvToMarkdown(decodeText(bytes));
+  if (ext === "hwpx") return hwpxToMarkdown(bytes);
   if (isMock(env)) {
     if (isImageExt(ext))
       throw new Error("연습 모드에는 글자를 읽을 비전 모델이 없어 이미지는 색인할 수 없습니다. npm run dev(진짜 AI 모드)에서 시험하세요.");
-    throw new Error("연습 모드에서는 TXT·MD·CSV 파일만 색인할 수 있습니다. PDF·DOCX·엑셀은 npm run dev(진짜 AI 모드)에서 시험하세요.");
+    throw new Error("연습 모드에서는 TXT·MD·CSV·HWPX 파일만 색인할 수 있습니다. PDF·DOCX·엑셀은 npm run dev(진짜 AI 모드)에서 시험하세요.");
   }
   if (isImageExt(ext)) return ocrImage(env, bytes, contentType);
 

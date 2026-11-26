@@ -49,6 +49,7 @@ const toJson = (d: DocRow) => ({
 const CONTENT_TYPES: Record<string, string> = {
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  hwpx: "application/hwp+zip",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   xlsm: "application/vnd.ms-excel.sheet.macroenabled.12",
   xls: "application/vnd.ms-excel",
@@ -81,6 +82,9 @@ documents.post("/", requireAdmin, async (c) => {
   if (!(file instanceof File)) return c.json({ error: "file 필드에 파일을 넣어 주세요." }, 400);
 
   const ext = extOf(file.name);
+  // 예전 한글 바이너리 형식(.hwp)은 구조가 공개 XML 이 아니라 읽지 않습니다.
+  if (ext === "hwp")
+    return c.json({ error: "HWP(예전 한글 형식)는 지원하지 않습니다. 한글에서 [다른 이름으로 저장] → HWPX 또는 PDF 로 저장해 올려 주세요." }, 400);
   if (!(SUPPORTED_EXT as readonly string[]).includes(ext))
     return c.json({ error: `지원하는 형식은 ${SUPPORTED_EXT.join(", ").toUpperCase()} 입니다.` }, 400);
   const maxMb = Number(c.env.MAX_UPLOAD_MB) || 10;

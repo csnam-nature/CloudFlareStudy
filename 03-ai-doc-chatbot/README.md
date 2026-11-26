@@ -40,7 +40,7 @@
 ```
 [업로드]  관리자 화면 ─► POST /api/documents ─► R2 put(docs/<id>.<확장자>) ─► D1 documents(queued)
                                              └─► Queue send({ docId })  ← 응답은 여기서 바로 끝
-[색인]    Queue 소비자 ─► R2 get ─► 텍스트 추출 (TXT·MD 그대로, CSV 는 표로 / PDF·DOCX·엑셀은 AI.toMarkdown / 이미지는 비전 모델 OCR)
+[색인]    Queue 소비자 ─► R2 get ─► 텍스트 추출 (TXT·MD 그대로, CSV·HWPX 는 직접 변환 / PDF·DOCX·엑셀은 AI.toMarkdown / 이미지는 비전 모델 OCR)
                        ─► 청크 분할 ─► AI.run(bge-m3) 임베딩 ─► Vectorize upsert(id "문서id:순번")
                        ─► D1 chunks 에 원문 저장 ─► documents.status = ready (실패하면 2번 더 시도 후 failed)
 
@@ -66,7 +66,7 @@
 | --- | --- | --- |
 | GET | `/api/me` | 관리자 여부, 연습 모드 여부, 모델 이름 |
 | GET | `/api/documents` | 문서 목록 + 전체 청크 수 |
-| POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`). PDF·DOCX·XLSX·XLSM·XLS·CSV·TXT·MD 10MB, JPG·PNG·WebP 4MB 까지 (관리자) |
+| POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`). PDF·DOCX·HWPX·XLSX·XLSM·XLS·CSV·TXT·MD 10MB, JPG·PNG·WebP 4MB 까지 (관리자) |
 | GET | `/api/documents/:id/file` | 원본 열기, `?download=1` 이면 내려받기 |
 | PATCH | `/api/documents/:id` | 이름 수정. 본문 `{ "name": "..." }` (관리자) |
 | POST | `/api/documents/:id/reindex` | 다시 색인 (관리자) |
@@ -81,7 +81,7 @@
 
 Workers AI 와 Vectorize 는 로컬 흉내가 없어서 `wrangler dev` 에서도 실제 Cloudflare 리소스를 씁니다.
 그래서 먼저 **AI 없이 화면과 흐름을 확인하는 연습 모드**를 둡니다(`wrangler.jsonc` 의 `env.mock`).
-가짜 임베딩(글자 조각 해시)과 D1 안의 단순 검색, "가장 비슷한 근거 문단을 그대로 보여 주는" 가짜 답변을 씁니다. TXT·MD 만 색인됩니다.
+가짜 임베딩(글자 조각 해시)과 D1 안의 단순 검색, "가장 비슷한 근거 문단을 그대로 보여 주는" 가짜 답변을 씁니다. TXT·MD·CSV·HWPX 만 색인됩니다(AI 가 필요 없는 형식).
 
 ```powershell
 cd D:\04_Study\IT기술\CloudFlare\CloudFlareStudy\03-ai-doc-chatbot
@@ -169,6 +169,7 @@ npm run deploy                           # https://doc-chatbot.<계정>.workers.
 
 - 무료 플랜 Worker 는 호출당 CPU 10ms 제한이 있지만, AI·DB 응답을 **기다리는 시간은 포함되지 않습니다.** 아주 큰 문서의 청크 분할은 CPU 를 쓰므로, 수백 쪽 문서는 나눠 올리는 편이 안전합니다.
 - 엑셀은 `toMarkdown` 이 시트를 Markdown 표로 바꾸고, 큰 표는 행 단위로 잘라 조각마다 머리글 행을 다시 붙입니다(`src/chunk.ts`). 그래서 첫 행에 열 이름이 있는 시트가 검색이 잘 됩니다. 차트·이미지 같은 표 밖의 내용은 색인되지 않을 수 있습니다. CSV 는 AI 없이 직접 표로 바꾸고, 엑셀에서 저장한 한국어 CSV(CP949)도 읽습니다.
+- **한글(HWPX)** 은 ZIP 안의 XML(`Contents/section*.xml`)을 직접 읽어 문단은 글로, 표는 Markdown 표로 바꿉니다(`src/hwpx.ts`, AI 불필요라 연습 모드에서도 됩니다). 예전 형식 **HWP 는 지원하지 않으니** 한글에서 [다른 이름으로 저장] → HWPX(또는 PDF)로 저장해 올리세요. 암호를 걸었거나 배포용으로 저장한 문서는 읽을 수 없습니다. 그림 속 글자는 색인되지 않습니다.
 - **이미지(JPG·PNG·WebP)** 는 비전 모델에 "보이는 글자를 그대로 옮겨 적어라(표는 Markdown 표로)"라고 요청해 얻은 글을 색인합니다(`src/ai.ts` 의 `ocrImage`). 스캔한 매뉴얼 페이지, 화면 캡처, 오류 코드표 사진에 쓸 수 있습니다. 모델이 읽는 것이라 틀린 글자가 있을 수 있으니, 중요한 문서는 관리 화면의 "열기"로 원본과 비교해 보세요. 이미지 한 장의 OCR 은 Neurons 를 꽤 쓰므로 무료 한도를 생각해 필요한 이미지만 올리세요. 연습 모드에서는 비전 모델이 없어 "실패"로 표시됩니다.
 - [지원 형식](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/supported-formats/)의 다른 형식(ODT, ODS, HTML 등)도 `SUPPORTED_EXT` 와 `CONTENT_TYPES` 에 추가하면 쓸 수 있습니다.
 - 문서 변환(`toMarkdown`)은 현재 베타입니다. 스캔 이미지로 된 PDF 는 텍스트가 없어 "텍스트를 찾지 못했습니다"로 실패합니다.

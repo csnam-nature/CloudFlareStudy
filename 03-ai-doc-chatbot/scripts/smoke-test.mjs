@@ -6,10 +6,11 @@
 // samples/charger-error-codes.md 를 올려 색인을 기다린 뒤, WebSocket 으로 질문 → 근거·답변 확인 →
 // 이름 수정 → 다시 색인 → 삭제까지 확인하고, 만든 데이터는 마지막에 모두 지웁니다.
 // Node.js 22 이상(내장 WebSocket)이 필요합니다.
-// 한 번에 질문을 6번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 1번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
+// 한 번에 질문을 7번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 1번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
 // "모두 삭제"도 확인하므로 연습 모드 로컬 DB 의 문서가 모두 지워집니다.
 
 import { readFile } from "node:fs/promises";
+import { strToU8, zipSync } from "fflate";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:8787";
 const ADMIN = process.env.ADMIN_TOKEN ?? "local-admin-token";
@@ -123,6 +124,28 @@ up = await upload(Buffer.from(csvRows.join("\r\n")), "부품 코드표.csv");
 const csvDoc = up.data;
 const csvIndexed = await waitIndexed(csvDoc.id);
 check("CSV 색인 완료, 큰 표는 여러 청크", csvIndexed?.status === "ready" && csvIndexed.chunkCount > 1, `청크 ${csvIndexed?.chunkCount}개`);
+
+// 3-2. 한글 HWPX: ZIP 안의 section XML 에서 문단·표를 직접 읽음(AI 불필요) / 예전 HWP 는 400
+const hp = (t) => `<hp:p><hp:run><hp:t>${t}</hp:t></hp:run></hp:p>`;
+const htc = (t) => `<hp:tc><hp:subList>${hp(t)}</hp:subList><hp:cellSpan colSpan="1" rowSpan="1"/></hp:tc>`;
+const hwpx = zipSync({
+  mimetype: strToU8("application/hwp+zip"),
+  "Contents/content.hpf": strToU8('<opf:package><opf:manifest><opf:item id="s0" href="Contents/section0.xml"/></opf:manifest><opf:spine><opf:itemref idref="s0"/></opf:spine></opf:package>'),
+  "Contents/section0.xml": strToU8(
+    `<?xml version="1.0" encoding="UTF-8"?><hs:sec xmlns:hs="s" xmlns:hp="p">${hp("냉각 장치 점검 안내")}` +
+      `<hp:p><hp:run><hp:tbl><hp:tr>${htc("코드")}${htc("조치")}</hp:tr><hp:tr>${htc("H-07")}${htc("냉각팬 분해 청소 &amp; 필터 교체")}</hp:tr></hp:tbl></hp:run></hp:p></hs:sec>`,
+  ),
+});
+up = await upload(Buffer.from(hwpx), "냉각 점검.hwpx");
+const hwpxDoc = up.data;
+const hwpxIndexed = await waitIndexed(hwpxDoc.id);
+check("HWPX 색인 완료", hwpxIndexed?.status === "ready", hwpxIndexed?.error);
+const ah = await ask(`smoke-hwpx-${Date.now()}`, "H-07 조치는?", hwpxDoc.id);
+check("HWPX 표 내용이 근거로 검색됨", ah.sources?.[0]?.text.includes("| H-07 | 냉각팬 분해 청소 & 필터 교체 |"), ah.sources?.[0]?.text);
+// 연습 모드의 가짜 검색은 엉성해서, 남겨 두면 아래 E-21 질문의 근거 순위를 흔듭니다. 확인했으니 바로 지웁니다.
+await fetch(`${BASE}/api/documents/${hwpxDoc.id}`, { method: "DELETE", headers: auth });
+up = await upload(Buffer.from("HWP Document File"), "옛날 문서.hwp");
+check("HWP(예전 형식) → 400 + HWPX 로 저장 안내", up.res.status === 400 && up.data.error?.includes("HWPX"), up.data.error);
 
 // 4. 채팅: 근거 검색 + 답변 스트리밍 + 기록 저장
 const session = `smoke-${Date.now()}`;
