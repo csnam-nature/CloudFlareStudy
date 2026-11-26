@@ -10,18 +10,22 @@
     "db:migrate:local": "wrangler d1 migrations apply doc-chatbot-db --local",
     "db:migrate:mock": "wrangler d1 migrations apply doc-chatbot-db --local --env mock",
     "db:migrate:remote": "wrangler d1 migrations apply doc-chatbot-db --remote",
-    "postinstall": "wrangler types",
+    "postinstall": "wrangler types && node scripts/copy-vendor.mjs",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke-test.mjs",
     "smoke:auth": "node scripts/smoke-auth.mjs",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "vendor": "node scripts/copy-vendor.mjs",
+    "predeploy": "node scripts/copy-vendor.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.14.0",
     "agents": "^0.34.0",
+    "chart.js": "^4.6.2",
     "fflate": "^0.8.3",
-    "hono": "^4.13.22"
+    "hono": "^4.13.22",
+    "mermaid": "^11.17.2"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

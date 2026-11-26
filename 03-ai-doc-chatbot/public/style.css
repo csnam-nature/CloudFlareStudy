@@ -249,3 +249,16 @@ table.docs .actions a { border: 1px solid var(--line); border-radius: 8px; text-
   footer.composer form { flex-wrap: wrap; }
   .ask-opts { flex-direction: row; width: 100%; }
 }
+
+/* 답변 안의 그래프·도식 (charts.js) */
+.viz { position: relative; margin: 10px 0; padding: 10px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.viz-canvas { position: relative; height: 300px; }
+.viz-svg { overflow-x: auto; text-align: center; }
+.viz-svg svg { max-width: 100%; height: auto; }
+.viz-dl { position: absolute; top: 6px; right: 6px; font-size: 12px; padding: 2px 8px; opacity: 0; transition: opacity 0.15s; }
+.viz:hover .viz-dl, .viz-dl:focus { opacity: 1; }
+.viz-wait { margin: 10px 0; padding: 18px; border: 1px dashed var(--line); border-radius: 8px; color: #6b7280; text-align: center; font-size: 13px; }
+.viz-error { color: #b42318; font-size: 13px; margin: 8px 0 4px; }
+.viz.viz-failed { padding: 6px 10px; }
+pre.code { background: #f6f7f9; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13px; overflow-x: auto; white-space: pre; }
+@media (hover: none) { .viz-dl { opacity: 1; } }

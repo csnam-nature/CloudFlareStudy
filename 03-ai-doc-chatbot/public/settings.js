@@ -68,6 +68,8 @@ function showSettings(s) {
     form.elements[k].value = s[k];
   form.elements.thinking.checked = s.thinking;
   form.elements.allowWebSearch.checked = s.allowWebSearch;
+  form.elements.allowCharts.checked = s.allowCharts;
+  $("#chartRule").textContent = settingsData.chartRule ?? "";
   const MODE_NAME = { docs: "📄 문서만", mixed: "📄+💡 문서 우선 + 일반 지식", general: "💡 일반 질문" };
   $("#modeRules").innerHTML = Object.entries(settingsData.modeRules ?? {})
     .map(([k, v]) => `<p><b>${esc(MODE_NAME[k] ?? k)}</b></p><pre>${esc(v)}</pre>`)
@@ -111,6 +113,7 @@ form.addEventListener("submit", async (e) => {
     ocrModel: modelValue("ocrModel"),
     thinking: f.thinking.checked,
     allowWebSearch: f.allowWebSearch.checked,
+    allowCharts: f.allowCharts.checked,
     temperature: Number(f.temperature.value),
     maxTokens: Number(f.maxTokens.value),
     topK: Number(f.topK.value),

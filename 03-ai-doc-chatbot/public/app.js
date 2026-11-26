@@ -7,6 +7,7 @@
 // 서버 쪽 메시지 형식은 src/agent.ts 맨 위 주석에 있습니다.
 
 import { $, esc, isAccount, showMode, toast } from "./common.js";
+import { renderVisuals } from "./charts.js";
 import { blocksToHtml, exportItems, parseBlocks } from "./export.js";
 import { createSidebar } from "./sidebar.js";
 
@@ -238,7 +239,7 @@ function addAnswer(id, content, sources, typing) {
 }
 
 function renderAnswer(a, typing) {
-  const body = a.content ? formatAnswer(a.content, a.sources.length) : typing ? "<p>근거를 찾는 중…</p>" : "";
+  const body = a.content ? formatAnswer(a.content, a.sources.length, typing) : typing ? "<p>근거를 찾는 중…</p>" : "";
   const src = a.sources.length
     ? `<details class="sources"><summary>근거 ${a.sources.length}개 보기</summary>${a.sources
         .map(
@@ -258,10 +259,9 @@ function renderAnswer(a, typing) {
   const open = a.el.querySelector("details")?.open;
   a.el.innerHTML = `<div class="${typing ? "typing" : ""}">${body}</div>${src}${save}`;
   for (const b of a.el.querySelectorAll(".save button"))
-    b.onclick = () => {
-      exportItems(b.dataset.f, appTitle, [{ question: a.question, answer: a.content, sources: a.sources }]);
-      if (b.dataset.f === "pdf") toast('인쇄 창에서 대상(프린터)을 "PDF로 저장"으로 고르세요.');
-    };
+    b.onclick = () => saveItems(b.dataset.f, [{ question: a.question, answer: a.content, sources: a.sources }]);
+  // 그래프·도식은 답변을 다 받은 뒤에 그립니다(받는 중에는 자리 표시만).
+  if (!typing) renderVisuals(a.el).then(() => scrollDown());
   if (open) a.el.querySelector("details").open = true;
   // 본문의 [1] 을 누르면 근거 목록을 펼치고 해당 근거를 강조
   for (const c of a.el.querySelectorAll(".cite"))
@@ -276,9 +276,9 @@ function renderAnswer(a, typing) {
     };
 }
 
-/** 답변 Markdown → HTML: 제목·문단·목록·표·**굵게**·`코드` (export.js 와 같은 변환) + [1] 근거 표시 */
-function formatAnswer(text, nSources) {
-  return blocksToHtml(parseBlocks(text))
+/** 답변 Markdown → HTML: 제목·문단·목록·표·**굵게**·`코드`·그래프 자리 (export.js 와 같은 변환) + [1] 근거 표시 */
+function formatAnswer(text, nSources, live = false) {
+  return blocksToHtml(parseBlocks(text), { live })
     .replace(/\[(\d+)\]/g, (m, n) => (Number(n) >= 1 && Number(n) <= nSources ? `<span class="cite" data-n="${n}">${n}</span>` : m))
     // "※ 등록 문서에 없는 일반 정보입니다." 로 시작하는 문단은 눈에 띄게 표시
     .replace(/<p>(※ 등록 문서에 없는 일반 정보입니다\.?)/g, '<p class="general-info"><b>$1</b>');
@@ -401,9 +401,14 @@ $("#saveAll").addEventListener("change", (e) => {
   e.target.value = "";
   const items = [...answers.values()].filter((a) => a.content).map((a) => ({ question: a.question, answer: a.content, sources: a.sources }));
   if (!items.length) return toast("저장할 답변이 없습니다.");
-  exportItems(format, appTitle, items);
-  if (format === "pdf") toast('인쇄 창에서 대상(프린터)을 "PDF로 저장"으로 고르세요.');
+  saveItems(format, items);
 });
+
+/** 저장 (그래프가 있으면 그림을 만드느라 잠깐 걸릴 수 있음) */
+function saveItems(format, items) {
+  if (format === "pdf") toast('인쇄 창에서 대상(프린터)을 "PDF로 저장"으로 고르세요.');
+  exportItems(format, appTitle, items).catch((e) => toast(`저장하지 못했습니다: ${e.message}`));
+}
 loadDocs();
 docFilter.addEventListener("focus", loadDocs);
 closeSidebarOnMobile();

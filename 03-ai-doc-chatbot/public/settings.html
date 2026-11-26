@@ -84,6 +84,11 @@ npx wrangler secret put ANTHROPIC_API_KEY</pre>
             <p>질문창 옆에서 고른 답변 모드의 규칙이 위 프롬프트 뒤에 자동으로 붙습니다. 그래서 프롬프트를 고쳐도 모드가 그대로 동작합니다. 규칙이 서로 다르면 모드 규칙을 따릅니다.</p>
             <div id="modeRules"></div>
           </details>
+          <label class="check"><input name="allowCharts" type="checkbox" /> 답변에 📊 그래프·도식 허용 <span class="muted">— 수치는 막대·선·원 그래프로, 절차는 순서도로 그립니다(아래 규칙이 프롬프트에 덧붙음)</span></label>
+          <details class="muted">
+            <summary>그래프 규칙 (허용하면 자동으로 덧붙음)</summary>
+            <pre id="chartRule"></pre>
+          </details>
           <label class="check"><input name="allowWebSearch" type="checkbox" /> 질문창의 🌐 웹 검색 허용 <span class="muted">— 답변 모델이 Claude·OpenAI 일 때만 동작 · 검색 1번마다 해당 회사에 요금(질문당 최대 3번)</span></label>
         </fieldset>
 

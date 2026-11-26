@@ -25,6 +25,8 @@
 │   ├── admin.html · admin.js # 문서 관리 화면 (업로드·목록·열기·이름 수정·다시 색인·삭제)
 │   ├── settings.html · settings.js # 설정 화면 (모델·외부 AI 키 상태·검색·색인 값)
 │   ├── export.js             # 답변 저장: Markdown · Word(.docx) · PDF(인쇄)
+│   ├── charts.js             # 답변 속 그래프(Chart.js)·도식(Mermaid) 그리기, 저장용 PNG
+│   ├── vendor/               # (npm install 때 자동 복사, git 에는 없음) chart.umd.min.js · mermaid.min.js
 │   ├── common.js · style.css
 ├── src/
 │   ├── index.ts              # 진입점: fetch(화면·API·에이전트 라우팅) + queue(색인)
@@ -272,12 +274,30 @@ npx wrangler secret put ANTHROPIC_API_KEY
   - Workers AI 모델에는 웹 검색 도구가 없어 체크 상자가 꺼져 있습니다(마우스를 올리면 이유가 보임). Workers AI 로도 하려면 Tavily·Brave 같은 검색 API(별도 키)를 붙이는 방법이 있습니다(지금은 구현하지 않음).
   - 설정 화면의 "질문창의 🌐 웹 검색 허용"을 끄면 모두 꺼집니다.
 
+## 답변 속 그래프·도식
+
+수치를 비교하거나 추이를 묻는 질문이면 답변 아래에 **📊 그래프**(막대·선·원)를, 절차·흐름을 물으면 **🔀 순서도**를 그려 줍니다.
+
+![그래프 답변 (연습 모드)](docs/chart-answer.png)
+![순서도 답변 (연습 모드)](docs/flow-answer.png)
+
+- 동작: AI 에게 "그래프가 도움이 되면 정해진 형식의 블록을 덧붙여라"는 규칙(`src/rag.ts` 의 `CHART_RULE`)을 줍니다. 답변 안의 ` ```chart ` 블록(JSON)은 Chart.js 로, ` ```mermaid ` 블록은 Mermaid 로 화면(`public/charts.js`)이 그립니다.
+- 그래프는 답변을 **다 받은 뒤** 그립니다. 받는 동안에는 "그리는 중…" 자리만 보입니다.
+- 형식이 틀린 블록은 그리지 않고 원래 글과 이유를 보여 줍니다. 규칙상 숫자는 표나 글로도 함께 적게 해서, 그래프가 실패해도 내용은 남습니다.
+- 계열끼리 크기가 10배 넘게 다르면(예: 충전 건수와 kWh) 오른쪽 축을 따로 씁니다.
+- 그래프에 마우스를 올리면 **⬇ PNG**(도식은 **⬇ SVG**) 버튼으로 그림만 저장할 수 있습니다.
+- 설정 화면의 **"답변에 📊 그래프·도식 허용"** 을 끄면 규칙을 빼서 그래프를 만들지 않습니다(기본은 켬). 프롬프트가 조금 길어지므로 Neurons 가 약간 더 듭니다.
+- 라이브러리(Chart.js 약 200KB, Mermaid 약 3.5MB)는 CDN 이 아니라 `npm install` 때 `public/vendor/` 로 복사해 Worker 정적 자산으로 같이 배포합니다(회사망에서 CDN 이 막혀도 동작). 블록이 처음 나올 때만 불러옵니다. **이 기능을 받은 뒤에는 `npm install` 을 한 번 실행한 다음 배포하세요.** (`npm run deploy` 는 배포 전에 다시 복사합니다)
+- 연습 모드에서는 질문에 "그래프·차트"가 있으면 근거의 표 숫자로, "순서도·흐름도"가 있으면 번호 목록으로 블록을 만들어 화면을 확인할 수 있습니다. 시험용 숫자 문서: `samples/charger-monthly-usage.md`
+- 그래프 숫자는 AI 가 근거에서 옮겨 적은 것이라 틀릴 수 있습니다. 중요한 값은 아래 근거와 표로 확인하세요.
+
 ## 답변 저장 (Markdown · Word · PDF)
 
 채팅 화면에서 답변마다 **저장 MD · Word · PDF** 버튼이 있고, 위쪽 **대화 저장…** 에서 지금까지의 대화 전체를 저장할 수 있습니다. 질문, 답변(표·목록 포함), 근거 문서 목록이 함께 들어갑니다. 서버를 거치지 않고 브라우저에서 바로 만듭니다(`public/export.js`).
 
 - **Word(.docx)**: 라이브러리 없이 ZIP 안에 Word XML 을 직접 넣어 만듭니다. 제목·표·목록·굵게가 Word 서식으로 들어가고 글꼴은 맑은 고딕입니다.
 - **PDF**: 한글 글꼴을 PDF 에 넣으려면 큰 글꼴 파일이 필요해서, 인쇄용 화면을 만들어 브라우저 인쇄 창을 엽니다. 대상(프린터)을 **"PDF로 저장"** 으로 고르세요.
+- **그래프·도식**: Word·PDF 에는 PNG 그림으로 들어가고, Markdown 에는 ` ```chart ` · ` ```mermaid ` 블록 글 그대로 들어갑니다(GitHub 등은 mermaid 를 그림으로 보여 줌).
 - HWPX 로 저장은 아직 없습니다. Word 파일을 한글에서 열어 HWPX 로 저장하면 됩니다.
 
 ## 모델과 설정값 (`wrangler.jsonc` 의 `vars`)
