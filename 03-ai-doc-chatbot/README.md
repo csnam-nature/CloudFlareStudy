@@ -40,7 +40,7 @@
 ```
 [업로드]  관리자 화면 ─► POST /api/documents ─► R2 put(docs/<id>.<확장자>) ─► D1 documents(queued)
                                              └─► Queue send({ docId })  ← 응답은 여기서 바로 끝
-[색인]    Queue 소비자 ─► R2 get ─► 텍스트 추출 (TXT·MD 그대로, CSV 는 표로 / PDF·DOCX·엑셀은 AI.toMarkdown)
+[색인]    Queue 소비자 ─► R2 get ─► 텍스트 추출 (TXT·MD 그대로, CSV 는 표로 / PDF·DOCX·엑셀은 AI.toMarkdown / 이미지는 비전 모델 OCR)
                        ─► 청크 분할 ─► AI.run(bge-m3) 임베딩 ─► Vectorize upsert(id "문서id:순번")
                        ─► D1 chunks 에 원문 저장 ─► documents.status = ready (실패하면 2번 더 시도 후 failed)
 
@@ -66,7 +66,7 @@
 | --- | --- | --- |
 | GET | `/api/me` | 관리자 여부, 연습 모드 여부, 모델 이름 |
 | GET | `/api/documents` | 문서 목록 + 전체 청크 수 |
-| POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`). PDF·DOCX·XLSX·XLSM·XLS·CSV·TXT·MD, 10MB 까지 (관리자) |
+| POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`). PDF·DOCX·XLSX·XLSM·XLS·CSV·TXT·MD 10MB, JPG·PNG·WebP 4MB 까지 (관리자) |
 | GET | `/api/documents/:id/file` | 원본 열기, `?download=1` 이면 내려받기 |
 | PATCH | `/api/documents/:id` | 이름 수정. 본문 `{ "name": "..." }` (관리자) |
 | POST | `/api/documents/:id/reindex` | 다시 색인 (관리자) |
@@ -143,7 +143,9 @@ npm run deploy                           # https://doc-chatbot.<계정>.workers.
 | `EMBED_MODEL` | `@cf/baai/bge-m3` | 다국어 임베딩(1024차원). 바꾸면 Vectorize 인덱스를 그 차원으로 다시 만들고 모든 문서를 다시 색인해야 합니다. |
 | `VECTOR_NAMESPACE` | `prod` (로컬은 `.dev.vars` 의 `dev`) | 같은 Vectorize 인덱스를 로컬과 배포본이 나눠 쓰기 위한 [네임스페이스](https://developers.cloudflare.com/vectorize/reference/metadata-filtering/#namespace-versus-metadata-filtering) |
 | `AI_GATEWAY_ID` | `doc-chatbot` | AI Gateway 이름. 비우면 게이트웨이 없이 호출 |
+| `OCR_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | 이미지 글자 읽기(OCR)용 비전 모델 |
 | `MAX_UPLOAD_MB` | `10` | 업로드 크기 한도 |
+| `MAX_IMAGE_MB` | `4` | 이미지 업로드 크기 한도 (base64 로 모델에 보내므로 작게) |
 | `MAX_CHUNKS_PER_DOC` | `400` | 문서 하나의 청크 한도 (Vectorize 무료 한도 보호) |
 
 모델은 자주 바뀝니다. 답변이 `5018`(이 계정은 모델 사용 불가), `5028`(지원 종료), `5035`(유료 플랜 필요) 오류로 실패하면
@@ -167,6 +169,7 @@ npm run deploy                           # https://doc-chatbot.<계정>.workers.
 
 - 무료 플랜 Worker 는 호출당 CPU 10ms 제한이 있지만, AI·DB 응답을 **기다리는 시간은 포함되지 않습니다.** 아주 큰 문서의 청크 분할은 CPU 를 쓰므로, 수백 쪽 문서는 나눠 올리는 편이 안전합니다.
 - 엑셀은 `toMarkdown` 이 시트를 Markdown 표로 바꾸고, 큰 표는 행 단위로 잘라 조각마다 머리글 행을 다시 붙입니다(`src/chunk.ts`). 그래서 첫 행에 열 이름이 있는 시트가 검색이 잘 됩니다. 차트·이미지 같은 표 밖의 내용은 색인되지 않을 수 있습니다. CSV 는 AI 없이 직접 표로 바꾸고, 엑셀에서 저장한 한국어 CSV(CP949)도 읽습니다.
+- **이미지(JPG·PNG·WebP)** 는 비전 모델에 "보이는 글자를 그대로 옮겨 적어라(표는 Markdown 표로)"라고 요청해 얻은 글을 색인합니다(`src/ai.ts` 의 `ocrImage`). 스캔한 매뉴얼 페이지, 화면 캡처, 오류 코드표 사진에 쓸 수 있습니다. 모델이 읽는 것이라 틀린 글자가 있을 수 있으니, 중요한 문서는 관리 화면의 "열기"로 원본과 비교해 보세요. 이미지 한 장의 OCR 은 Neurons 를 꽤 쓰므로 무료 한도를 생각해 필요한 이미지만 올리세요. 연습 모드에서는 비전 모델이 없어 "실패"로 표시됩니다.
 - [지원 형식](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/supported-formats/)의 다른 형식(ODT, ODS, HTML 등)도 `SUPPORTED_EXT` 와 `CONTENT_TYPES` 에 추가하면 쓸 수 있습니다.
 - 문서 변환(`toMarkdown`)은 현재 베타입니다. 스캔 이미지로 된 PDF 는 텍스트가 없어 "텍스트를 찾지 못했습니다"로 실패합니다.
 

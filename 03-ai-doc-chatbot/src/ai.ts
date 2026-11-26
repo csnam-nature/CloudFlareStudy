@@ -25,7 +25,9 @@ function runAi(env: Bindings, model: string, input: object): Promise<unknown> {
 
 // ── 1. 문서 → 텍스트 ─────────────────────────────────────────
 
-export const SUPPORTED_EXT = ["pdf", "docx", "xlsx", "xlsm", "xls", "csv", "txt", "md"] as const;
+export const IMAGE_EXT = ["jpg", "jpeg", "png", "webp"] as const;
+export const SUPPORTED_EXT = ["pdf", "docx", "xlsx", "xlsm", "xls", "csv", "txt", "md", ...IMAGE_EXT] as const;
+export const isImageExt = (ext: string) => (IMAGE_EXT as readonly string[]).includes(ext);
 export const extOf = (filename: string) => filename.split(".").pop()?.toLowerCase() ?? "";
 
 /**
@@ -38,12 +40,57 @@ export async function extractText(env: Bindings, filename: string, bytes: ArrayB
   const ext = extOf(filename);
   if (ext === "txt" || ext === "md") return new TextDecoder("utf-8").decode(bytes);
   if (ext === "csv") return csvToMarkdown(decodeText(bytes));
-  if (isMock(env))
+  if (isMock(env)) {
+    if (isImageExt(ext))
+      throw new Error("연습 모드에는 글자를 읽을 비전 모델이 없어 이미지는 색인할 수 없습니다. npm run dev(진짜 AI 모드)에서 시험하세요.");
     throw new Error("연습 모드에서는 TXT·MD·CSV 파일만 색인할 수 있습니다. PDF·DOCX·엑셀은 npm run dev(진짜 AI 모드)에서 시험하세요.");
+  }
+  if (isImageExt(ext)) return ocrImage(env, bytes, contentType);
 
   const result = await env.AI!.toMarkdown({ name: filename, blob: new Blob([bytes], { type: contentType }) });
   if (result.format === "error") throw new Error(`문서 변환 실패: ${result.error}`);
   return result.data;
+}
+
+/**
+ * 이미지 속 글자 읽기(OCR): 비전 모델에 이미지를 보여 주고 "글자를 그대로 옮겨 적어라"라고 요청합니다.
+ * toMarkdown 도 이미지를 받지만, 그쪽은 "이미지 설명"(영어 등)을 만드는 기능이라 표·코드표를 그대로 옮기기에는 맞지 않습니다.
+ * 모델은 vars 의 OCR_MODEL (기본 gemma-4: 비전·OCR·한국어 지원, 무료 플랜 사용 가능).
+ */
+const OCR_PROMPT = `이 이미지에 보이는 글자를 그대로 옮겨 적으세요.
+규칙:
+- 요약·번역·설명을 하지 말고, 보이는 글자만 원래 언어와 순서대로 적으세요.
+- 표는 Markdown 표(| 열 | 열 |)로, 제목은 # 로, 목록은 - 로 옮기세요.
+- 읽을 수 없는 글자는 [?] 로 적으세요.
+- 글자가 전혀 없으면 (글자 없음) 이라고만 적으세요.`;
+
+async function ocrImage(env: Bindings, bytes: ArrayBuffer, contentType: string): Promise<string> {
+  // 이미지를 base64 데이터 URL 로 만들어 메시지에 넣습니다. (큰 이미지는 요청이 커지므로 업로드에서 크기를 제한)
+  let bin = "";
+  const u8 = new Uint8Array(bytes);
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+  const dataUrl = `data:${contentType};base64,${btoa(bin)}`;
+
+  const res = (await runAi(env, env.OCR_MODEL, {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: OCR_PROMPT },
+          { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
+        ],
+      },
+    ],
+    max_tokens: 4096,
+    temperature: 0, // 옮겨 적기는 창의성이 필요 없음
+    // 생각 모드를 끄지 않으면 생각에 토큰을 다 쓰고 본문이 비어 올 수 있습니다(답변 모델과 같은 이유).
+    ...(/gemma-4|qwen3|glm-4\.7/.test(env.OCR_MODEL) ? { chat_template_kwargs: { enable_thinking: false } } : {}),
+  })) as { response?: string; choices?: { message?: { content?: string | null }; finish_reason?: string }[] };
+
+  const text = (res.response || res.choices?.[0]?.message?.content || "").trim();
+  if (res.choices?.[0]?.finish_reason === "length") console.warn("OCR 결과가 길이 한도에서 잘렸을 수 있습니다.");
+  if (!text || text === "(글자 없음)") return "";
+  return text;
 }
 
 /** UTF-8 로 읽되, 깨진 글자가 많으면 엑셀이 기본으로 저장하는 한국어 인코딩(EUC-KR/CP949)으로 다시 읽습니다. */

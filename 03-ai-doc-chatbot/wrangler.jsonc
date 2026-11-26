@@ -88,7 +88,10 @@
     // 다른 모델을 시험할 때는 이 값을 고치거나, 로컬에서는 .dev.vars 에 CHAT_MODEL=... 을 넣어 덮어쓰세요.
     "CHAT_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     "EMBED_MODEL": "@cf/baai/bge-m3",
+    // 이미지(JPG·PNG·WebP) 글자 읽기(OCR)용 비전 모델. gemma-4 는 비전·OCR 을 지원합니다.
+    "OCR_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     "MAX_UPLOAD_MB": "10",
+    "MAX_IMAGE_MB": "4",
     // 문서 하나의 최대 청크 수. Vectorize 무료 저장 한도(500만 차원 ≈ 1024차원 4,880개)를 지키기 위한 안전장치.
     "MAX_CHUNKS_PER_DOC": "400"
   },
@@ -119,7 +122,9 @@
         "AI_GATEWAY_ID": "",
         "CHAT_MODEL": "mock",
         "EMBED_MODEL": "mock",
+        "OCR_MODEL": "mock",
         "MAX_UPLOAD_MB": "10",
+        "MAX_IMAGE_MB": "4",
         "MAX_CHUNKS_PER_DOC": "400"
       }
     }

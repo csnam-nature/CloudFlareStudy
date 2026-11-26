@@ -9,7 +9,7 @@
 //   DELETE /api/documents?confirm=all  모두 삭제(관리자): 실수로 부르지 않도록 confirm=all 이 있어야 합니다
 
 import { Hono } from "hono";
-import { deleteVectors, extOf, SUPPORTED_EXT } from "./ai";
+import { deleteVectors, extOf, isImageExt, SUPPORTED_EXT } from "./ai";
 import { type AppEnv, type Bindings, nowSec, requireAdmin } from "./auth";
 
 export const documents = new Hono<AppEnv>();
@@ -53,6 +53,10 @@ const CONTENT_TYPES: Record<string, string> = {
   xlsm: "application/vnd.ms-excel.sheet.macroenabled.12",
   xls: "application/vnd.ms-excel",
   csv: "text/csv",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
   txt: "text/plain; charset=utf-8",
   md: "text/markdown; charset=utf-8",
 };
@@ -82,6 +86,10 @@ documents.post("/", requireAdmin, async (c) => {
   const maxMb = Number(c.env.MAX_UPLOAD_MB) || 10;
   if (file.size === 0) return c.json({ error: "빈 파일입니다." }, 400);
   if (file.size > maxMb * 1024 * 1024) return c.json({ error: `파일은 ${maxMb}MB 까지 올릴 수 있습니다.` }, 413);
+  // 이미지는 base64 로 모델에 통째로 보내므로 더 작게 제한합니다. 사진은 글자가 읽히는 정도로 줄여서 올리세요.
+  const maxImageMb = Number(c.env.MAX_IMAGE_MB) || 4;
+  if (isImageExt(ext) && file.size > maxImageMb * 1024 * 1024)
+    return c.json({ error: `이미지는 ${maxImageMb}MB 까지 올릴 수 있습니다. 해상도를 줄여서 올려 주세요.` }, 413);
 
   const name = String(form?.get("name") ?? "").trim() || file.name.replace(/\.[^.]+$/, "");
   const now = nowSec();

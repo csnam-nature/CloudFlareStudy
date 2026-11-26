@@ -53,7 +53,7 @@ async function indexDocument(env: Bindings, docId: number): Promise<number> {
   } catch (e) {
     throw new PermanentError(e instanceof Error ? e.message : String(e));
   }
-  if (!text.trim()) throw new PermanentError("문서에서 텍스트를 찾지 못했습니다. (스캔 이미지 PDF 는 지원하지 않습니다)");
+  if (!text.trim()) throw new PermanentError("문서에서 텍스트를 찾지 못했습니다. (스캔 이미지 PDF 는 지원하지 않습니다. 페이지를 JPG·PNG 로 저장해 올리면 OCR 로 읽습니다)");
 
   // 3) 청크 분할
   const chunks = chunkText(text);

@@ -105,6 +105,17 @@ if (me.mock) {
   check("연습 모드 PDF → 실패 + 이유 표시", r?.status === "failed" && /TXT/.test(r.error ?? ""), r?.error);
 }
 
+// 3-0. 이미지: 연습 모드는 비전 모델이 없어 실패로 표시, 너무 큰 이미지는 업로드 거절
+if (me.mock) {
+  const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082", "hex");
+  up = await upload(png, "오류 코드 사진.png");
+  const r = await waitIndexed(up.data.id);
+  check("연습 모드 이미지 → 실패 + 비전 모델 안내", r?.status === "failed" && /비전 모델/.test(r.error ?? ""), r?.error);
+  await fetch(`${BASE}/api/documents/${up.data.id}`, { method: "DELETE", headers: auth });
+  up = await upload(Buffer.alloc(5 * 1024 * 1024), "big.jpg");
+  check("4MB 넘는 이미지 → 413", up.res.status === 413, up.data.error);
+}
+
 // 3-1. CSV(엑셀에서 저장한 표): 머리글 + 여러 행 → 표 청크마다 머리글이 다시 붙음
 const csvRows = ["코드,이름,조치"];
 for (let i = 1; i <= 40; i++) csvRows.push(`P-${100 + i},"부품 ${i}, 교체 필요",${i % 2 ? "현장 점검" : "원격 재부팅"}`);
