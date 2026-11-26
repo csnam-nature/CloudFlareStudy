@@ -25,22 +25,67 @@ function runAi(env: Bindings, model: string, input: object): Promise<unknown> {
 
 // ── 1. 문서 → 텍스트 ─────────────────────────────────────────
 
-export const SUPPORTED_EXT = ["pdf", "docx", "txt", "md"] as const;
+export const SUPPORTED_EXT = ["pdf", "docx", "xlsx", "xlsm", "xls", "csv", "txt", "md"] as const;
 export const extOf = (filename: string) => filename.split(".").pop()?.toLowerCase() ?? "";
 
 /**
  * 원본 파일에서 텍스트를 꺼냅니다.
- * TXT·MD 는 그대로 읽고, PDF·DOCX 는 Workers AI 의 Markdown 변환(toMarkdown, 현재 베타)을 씁니다.
+ * TXT·MD 는 그대로 읽고, CSV 는 직접 Markdown 표로 바꿉니다(AI 불필요).
+ * PDF·DOCX·엑셀(XLSX·XLSM·XLS)은 Workers AI 의 Markdown 변환(toMarkdown, 현재 베타)을 씁니다. 엑셀은 시트가 표로 바뀝니다.
  * toMarkdown 은 Neurons 를 쓰지 않는 변환 기능입니다(이미지 설명 생성 제외).
  */
 export async function extractText(env: Bindings, filename: string, bytes: ArrayBuffer, contentType: string) {
   const ext = extOf(filename);
   if (ext === "txt" || ext === "md") return new TextDecoder("utf-8").decode(bytes);
-  if (isMock(env)) throw new Error("연습 모드에서는 TXT·MD 파일만 색인할 수 있습니다. PDF·DOCX 는 npm run dev(진짜 AI 모드)에서 시험하세요.");
+  if (ext === "csv") return csvToMarkdown(decodeText(bytes));
+  if (isMock(env))
+    throw new Error("연습 모드에서는 TXT·MD·CSV 파일만 색인할 수 있습니다. PDF·DOCX·엑셀은 npm run dev(진짜 AI 모드)에서 시험하세요.");
 
   const result = await env.AI!.toMarkdown({ name: filename, blob: new Blob([bytes], { type: contentType }) });
   if (result.format === "error") throw new Error(`문서 변환 실패: ${result.error}`);
   return result.data;
+}
+
+/** UTF-8 로 읽되, 깨진 글자가 많으면 엑셀이 기본으로 저장하는 한국어 인코딩(EUC-KR/CP949)으로 다시 읽습니다. */
+function decodeText(bytes: ArrayBuffer): string {
+  const utf8 = new TextDecoder("utf-8").decode(bytes);
+  if (!utf8.includes("\uFFFD")) return utf8.replace(/^\uFEFF/, "");
+  try {
+    return new TextDecoder("euc-kr").decode(bytes);
+  } catch {
+    return utf8;
+  }
+}
+
+/**
+ * CSV → Markdown 표. 첫 줄을 머리글로 씁니다. 따옴표("...")로 감싼 칸 안의 쉼표·줄바꿈도 처리합니다.
+ * 표 모양으로 바꿔 두면 청크로 나눌 때 머리글을 조각마다 다시 붙일 수 있습니다(chunk.ts).
+ */
+export function csvToMarkdown(text: string): string {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') (cell += '"'), i++;
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") row.push(cell), (cell = "");
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell), rows.push(row), (row = []), (cell = "");
+    } else cell += ch;
+  }
+  if (cell || row.length) row.push(cell), rows.push(row);
+  const data = rows.filter((r) => r.some((c) => c.trim()));
+  if (!data.length) return "";
+  const width = Math.max(...data.map((r) => r.length));
+  const fmt = (r: string[]) =>
+    `| ${Array.from({ length: width }, (_, i) => (r[i] ?? "").replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ").trim()).join(" | ")} |`;
+  return [fmt(data[0]), `| ${Array(width).fill("---").join(" | ")} |`, ...data.slice(1).map(fmt)].join("\n");
 }
 
 // ── 2. 임베딩 ────────────────────────────────────────────────

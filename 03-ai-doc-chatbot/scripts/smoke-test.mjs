@@ -6,7 +6,7 @@
 // samples/charger-error-codes.md 를 올려 색인을 기다린 뒤, WebSocket 으로 질문 → 근거·답변 확인 →
 // 이름 수정 → 다시 색인 → 삭제까지 확인하고, 만든 데이터는 마지막에 모두 지웁니다.
 // Node.js 22 이상(내장 WebSocket)이 필요합니다.
-// 한 번에 질문을 5번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 2번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
+// 한 번에 질문을 6번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 1번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
 // "모두 삭제"도 확인하므로 연습 모드 로컬 DB 의 문서가 모두 지워집니다.
 
 import { readFile } from "node:fs/promises";
@@ -105,6 +105,14 @@ if (me.mock) {
   check("연습 모드 PDF → 실패 + 이유 표시", r?.status === "failed" && /TXT/.test(r.error ?? ""), r?.error);
 }
 
+// 3-1. CSV(엑셀에서 저장한 표): 머리글 + 여러 행 → 표 청크마다 머리글이 다시 붙음
+const csvRows = ["코드,이름,조치"];
+for (let i = 1; i <= 40; i++) csvRows.push(`P-${100 + i},"부품 ${i}, 교체 필요",${i % 2 ? "현장 점검" : "원격 재부팅"}`);
+up = await upload(Buffer.from(csvRows.join("\r\n")), "부품 코드표.csv");
+const csvDoc = up.data;
+const csvIndexed = await waitIndexed(csvDoc.id);
+check("CSV 색인 완료, 큰 표는 여러 청크", csvIndexed?.status === "ready" && csvIndexed.chunkCount > 1, `청크 ${csvIndexed?.chunkCount}개`);
+
 // 4. 채팅: 근거 검색 + 답변 스트리밍 + 기록 저장
 const session = `smoke-${Date.now()}`;
 const a1 = await ask(session, "E-21 오류는 무엇인가요?");
@@ -168,7 +176,17 @@ check("원본은 올린 바이트 그대로", res.status === 200 && body.equals(
 check("한글 파일 이름 유지", (res.headers.get("content-disposition") ?? "").includes(encodeURIComponent("충전기 오류 코드.md")));
 
 // 8. 삭제 → 검색에서도 사라짐
-for (const d of [doc, pdfDoc].filter(Boolean)) {
+{
+  const csvAnswer = await ask(`smoke-csv-${Date.now()}`, "P-137 조치", csvDoc.id);
+  const srcs = csvAnswer.sources ?? [];
+  check(
+    "CSV 조각마다 머리글(코드 | 이름 | 조치)이 붙어 있음",
+    srcs.length > 1 && srcs.every((x) => x.text.startsWith("| 코드 | 이름 | 조치 |\n| --- | --- | --- |")),
+    `${srcs.length}개 조각`,
+  );
+  check("따옴표 안 쉼표는 한 칸으로 읽음", srcs.some((x) => x.text.includes("| 부품 1, 교체 필요 |") || x.text.includes("교체 필요 | 원격")));
+}
+for (const d of [doc, pdfDoc, csvDoc].filter(Boolean)) {
   res = await fetch(`${BASE}/api/documents/${d.id}`, { method: "DELETE", headers: auth });
   check(`문서 삭제 ${d.id}`, res.status === 200);
 }

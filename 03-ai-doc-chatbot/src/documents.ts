@@ -49,6 +49,10 @@ const toJson = (d: DocRow) => ({
 const CONTENT_TYPES: Record<string, string> = {
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xlsm: "application/vnd.ms-excel.sheet.macroenabled.12",
+  xls: "application/vnd.ms-excel",
+  csv: "text/csv",
   txt: "text/plain; charset=utf-8",
   md: "text/markdown; charset=utf-8",
 };
