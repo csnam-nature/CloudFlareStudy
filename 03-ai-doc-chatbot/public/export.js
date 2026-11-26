@@ -110,7 +110,8 @@ function buildMarkdown(appTitle, items) {
     if (items.length > 1) out.push(`## ${n + 1}. ${oneLine(it.question)}`, "");
     else out.push(`## 질문`, "", it.question || "(질문 없음)", "");
     if (items.length === 1) out.push("## 답변", "");
-    else out.push(`**질문:** ${oneLine(it.question)}`, "");
+    // 제목은 한 줄로 줄이고, 본문에는 질문 전체를 넣습니다(긴 질문의 조건이 잘리지 않게).
+    else out.push("**질문**", "", String(it.question ?? "").trim() || "(질문 없음)", "");
     out.push(it.answer.trim() || "(답변 없음)", "");
     if (it.sources?.length) {
       out.push(items.length > 1 ? "**근거 문서**" : "## 근거 문서", "");
