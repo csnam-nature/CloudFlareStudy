@@ -71,6 +71,7 @@
 | PATCH | `/api/documents/:id` | 이름 수정. 본문 `{ "name": "..." }` (관리자) |
 | POST | `/api/documents/:id/reindex` | 다시 색인 (관리자) |
 | DELETE | `/api/documents/:id` | 삭제: R2 원본, D1 행·청크, Vectorize 벡터 모두 (관리자) |
+| DELETE | `/api/documents?confirm=all` | 모두 삭제. 관리 화면의 "모두 삭제" 버튼은 `모두 삭제` 라고 입력해야 실행됩니다 (관리자) |
 | WS | `/agents/chat-agent/:세션id` | 채팅. 메시지 형식은 `src/agent.ts` 참고 |
 
 관리자 API 는 헤더 `Authorization: Bearer <ADMIN_TOKEN>` 이 필요합니다. 질문과 원본 열기는 누구나 할 수 있습니다.

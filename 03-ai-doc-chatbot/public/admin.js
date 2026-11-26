@@ -166,5 +166,21 @@ async function api(method, path, body) {
 }
 
 $("#refresh").onclick = load;
+
+// 모두 삭제: 되돌릴 수 없으므로 문구를 직접 입력해야 진행합니다.
+$("#deleteAll").onclick = async () => {
+  if (!docs.length) return toast("삭제할 문서가 없습니다.");
+  const typed = prompt(`문서 ${docs.length}개와 원본·청크·벡터를 모두 지웁니다. 되돌릴 수 없습니다.\n계속하려면 '모두 삭제' 라고 입력하세요.`);
+  if (typed?.trim() !== "모두 삭제") return typed == null ? undefined : toast("입력이 달라 취소했습니다.");
+  const btn = $("#deleteAll");
+  btn.disabled = true;
+  btn.textContent = "삭제 중…";
+  const res = await api("DELETE", "/api/documents?confirm=all");
+  btn.disabled = false;
+  btn.textContent = "모두 삭제";
+  if (res) toast(`문서 ${res.deleted}개를 모두 삭제했습니다.`);
+  editingId = null;
+  load();
+};
 checkToken();
 load();

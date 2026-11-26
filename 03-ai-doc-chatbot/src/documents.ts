@@ -6,6 +6,7 @@
 //   PATCH  /api/documents/:id          이름 수정(관리자)
 //   POST   /api/documents/:id/reindex  다시 색인(관리자)
 //   DELETE /api/documents/:id          삭제(관리자): R2 원본, D1 행·청크, Vectorize 벡터 모두
+//   DELETE /api/documents?confirm=all  모두 삭제(관리자): 실수로 부르지 않도록 confirm=all 이 있어야 합니다
 
 import { Hono } from "hono";
 import { deleteVectors, extOf, SUPPORTED_EXT } from "./ai";
@@ -152,6 +153,20 @@ documents.delete("/:id", requireAdmin, async (c) => {
   await c.env.FILES.delete(doc.r2_key);
   await c.env.DB.prepare("DELETE FROM documents WHERE id = ?").bind(id).run();
   return c.json({ ok: true });
+});
+
+// 모두 삭제: 문서마다 벡터·청크·원본을 지운 뒤 행을 지웁니다.
+documents.delete("/", requireAdmin, async (c) => {
+  if (c.req.query("confirm") !== "all") return c.json({ error: "모두 삭제하려면 ?confirm=all 을 붙여 주세요." }, 400);
+  const { results } = await c.env.DB.prepare("SELECT id, r2_key FROM documents").all<{ id: number; r2_key: string }>();
+  for (const d of results) {
+    await removeChunks(c.env, d.id);
+    if (d.r2_key) await c.env.FILES.delete(d.r2_key);
+    await c.env.DB.prepare("DELETE FROM documents WHERE id = ?").bind(d.id).run();
+  }
+  // 혹시 남은 연습 모드 벡터도 정리
+  await c.env.DB.prepare("DELETE FROM mock_vectors").run();
+  return c.json({ ok: true, deleted: results.length });
 });
 
 /** 문서의 청크를 D1 과 Vectorize(또는 mock_vectors)에서 모두 지웁니다. */

@@ -72,6 +72,12 @@ async function indexDocument(env: Bindings, docId: number): Promise<number> {
   for (let i = 0; i < chunks.length; i += 50)
     await env.DB.batch(chunks.slice(i, i + 50).map((t, j) => stmt.bind(ids[i + j], docId, i + j, t)));
 
+  // 색인하는 사이에 문서가 삭제됐다면 방금 넣은 청크·벡터도 지웁니다(삭제/모두 삭제와 동시에 일어난 경우).
+  if (!(await getDoc(env, docId))) {
+    await removeChunks(env, docId);
+    return 0;
+  }
+
   const now = nowSec();
   await env.DB.prepare(
     "UPDATE documents SET status = 'ready', error = NULL, chunk_count = ?, char_count = ?, indexed_at = ?, updated_at = ? WHERE id = ?",

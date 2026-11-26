@@ -6,7 +6,8 @@
 // samples/charger-error-codes.md 를 올려 색인을 기다린 뒤, WebSocket 으로 질문 → 근거·답변 확인 →
 // 이름 수정 → 다시 색인 → 삭제까지 확인하고, 만든 데이터는 마지막에 모두 지웁니다.
 // Node.js 22 이상(내장 WebSocket)이 필요합니다.
-// 한 번에 질문을 4번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 3번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
+// 한 번에 질문을 5번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 2번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
+// "모두 삭제"도 확인하므로 연습 모드 로컬 DB 의 문서가 모두 지워집니다.
 
 import { readFile } from "node:fs/promises";
 
@@ -175,6 +176,21 @@ res = await fetch(`${BASE}/api/documents/${doc.id}/file`);
 check("삭제 후 원본 → 404", res.status === 404);
 const a3 = await ask(session, "E-21 오류는 무엇인가요?", doc.id);
 check("삭제한 문서의 근거는 더 이상 나오지 않음", a3.done && (a3.sources?.length ?? 0) === 0);
+
+// 8-1. 모두 삭제: confirm 없음 → 400, 토큰 없음 → 401, 정상 → 전부 사라짐
+for (const name of ["a.md", "b.md"]) await upload(sample, name);
+res = await fetch(`${BASE}/api/documents`, { method: "DELETE", headers: auth });
+check("모두 삭제: confirm=all 없으면 → 400", res.status === 400);
+res = await fetch(`${BASE}/api/documents?confirm=all`, { method: "DELETE" });
+check("모두 삭제: 토큰 없으면 → 401", res.status === 401);
+res = await fetch(`${BASE}/api/documents?confirm=all`, { method: "DELETE", headers: auth });
+const delAll = await res.json();
+check("모두 삭제 → 200", res.status === 200 && delAll.deleted >= 2, `${delAll.deleted}개`);
+await sleep(3000); // 색인 중이던 작업이 끝나도 되살아나지 않는지 확인
+const after = await (await fetch(`${BASE}/api/documents`)).json();
+check("모두 삭제 후 목록·청크 0", after.documents.length === 0 && after.totalChunks === 0);
+const a4 = await ask(session, "E-21 오류는 무엇인가요?");
+check("모두 삭제 후 근거 없음", a4.done && (a4.sources?.length ?? 0) === 0);
 
 // 9. 새 대화(reset)
 await new Promise((resolve) => {
