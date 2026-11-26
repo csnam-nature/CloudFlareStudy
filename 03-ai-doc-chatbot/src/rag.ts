@@ -18,6 +18,8 @@ const MOCK_MIN_SCORE = 0.05;
 const CANDIDATES = { real: 20, mock: 50 };
 // 키워드 검색으로 더하는 후보 수(단어마다)
 const KEYWORD_LIMIT = 20;
+// 한 쿼리에 넣을 청크 id 수(D1 바인딩 한도 100 아래로)
+const SQL_BATCH = 90;
 
 /**
  * 하이브리드 검색 = 벡터 검색(뜻이 비슷한 조각) + 키워드 검색(질문 단어가 그대로 들어 있는 조각).
@@ -56,14 +58,23 @@ export async function retrieve(
   }
 
   // Vectorize 는 벡터만 돌려주므로 원문은 D1 에서 같은 id 로 꺼냅니다.
+  // D1 은 쿼리 하나에 바인딩 값을 100개까지만 받으므로, 후보가 많으면(벡터 + 키워드) 나눠서 꺼냅니다.
   const list = [...ids];
-  const { results } = await env.DB.prepare(
-    `SELECT c.id, c.doc_id, c.seq, c.text, d.name
-       FROM chunks c JOIN documents d ON d.id = c.doc_id
-      WHERE c.id IN (${list.map(() => "?").join(",")})${vis.sql}`,
-  )
-    .bind(...list, ...vis.args)
-    .all<{ id: string; doc_id: number; seq: number; text: string; name: string }>();
+  const per = SQL_BATCH - vis.args.length;
+  const stmts = [];
+  for (let i = 0; i < list.length; i += per) {
+    const part = list.slice(i, i + per);
+    stmts.push(
+      env.DB.prepare(
+        `SELECT c.id, c.doc_id, c.seq, c.text, d.name
+           FROM chunks c JOIN documents d ON d.id = c.doc_id
+          WHERE c.id IN (${part.map(() => "?").join(",")})${vis.sql}`,
+      ).bind(...part, ...vis.args),
+    );
+  }
+  const results = (await env.DB.batch<{ id: string; doc_id: number; seq: number; text: string; name: string }>(stmts)).flatMap(
+    (r) => r.results,
+  );
 
   // 최종 점수 = 벡터 점수 + 키워드 점수(질문 단어가 들어 있는 비율 × 0.5). 그 사이 삭제된 청크는 결과에 없으므로 빠집니다.
   const sources = results

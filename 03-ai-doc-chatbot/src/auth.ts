@@ -188,11 +188,17 @@ export const isAdmin = (c: Context<AppEnv>) => hasRole(c.get("user"), "admin");
 /** 볼 수 있는 문서 범위: null = 전부(매니저 이상), 배열 = 전 직원 공개 문서 + 이 그룹들의 문서 */
 export const docScope = (u: User): number[] | null => (hasRole(u, "manager") ? null : u.groups);
 
-/** SQL 조건 조각. alias 는 documents 표의 별칭. 예) AND (d.group_id IS NULL OR d.group_id IN (?, ?)) */
+/**
+ * SQL 조건 조각. alias 는 documents 표의 별칭. 예) AND (d.group_id IS NULL OR d.group_id IN (3,7))
+ * 그룹 id 는 바인딩(?) 대신 숫자로 바로 넣습니다. D1 은 쿼리 하나에 바인딩 값을 100개까지만 받는데,
+ * 검색 쿼리는 청크 id 를 많이 바인딩하므로 그 자리를 그룹 수가 잡아먹지 않게 하려는 것입니다.
+ * 정수인지 확인한 값만 넣으므로 SQL 주입 걱정은 없습니다.
+ */
 export function scopeSql(scope: number[] | null, alias: string): { sql: string; args: number[] } {
   if (scope === null) return { sql: "", args: [] };
-  if (!scope.length) return { sql: ` AND ${alias}.group_id IS NULL`, args: [] };
-  return { sql: ` AND (${alias}.group_id IS NULL OR ${alias}.group_id IN (${scope.map(() => "?").join(",")}))`, args: scope };
+  const ids = scope.filter((x) => Number.isSafeInteger(x) && x > 0);
+  if (!ids.length) return { sql: ` AND ${alias}.group_id IS NULL`, args: [] };
+  return { sql: ` AND (${alias}.group_id IS NULL OR ${alias}.group_id IN (${ids.join(",")}))`, args: [] };
 }
 
 export const canSeeDoc = (scope: number[] | null, groupId: number | null) =>
