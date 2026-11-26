@@ -209,6 +209,7 @@ function codeToHtml(b, live) {
   const pre = `<pre class="code"><code>${esc(b.code)}</code></pre>`;
   if (!VISUAL[b.lang]) return pre;
   if (b.image) return `<figure class="viz-img"><img src="${b.image.dataUrl}" alt="${esc(b.image.alt)}" style="max-width:100%;width:${b.image.width}px" /></figure>`;
+  if (b.failed) return pre;
   if (live) return `<div class="viz-wait">${VISUAL[b.lang]} 그리는 중… (답변이 끝나면 나타납니다)</div>`;
   if (b.open) return pre; // 닫는 ``` 없이 끝난 블록(답변이 잘림)은 글 그대로
   if (b.lang === "mermaid") return `<div class="viz viz-mermaid" data-code="${attr(b.code)}"></div>`;
@@ -232,6 +233,7 @@ async function prepareImages(blocks) {
       }
     } catch (e) {
       console.warn("저장용 그림을 만들지 못했습니다:", e);
+      b.failed = true; // 저장 파일에는 원래 글을 그대로 넣습니다(빈 그래프 자리가 남지 않게)
     }
   }
   return blocks;
