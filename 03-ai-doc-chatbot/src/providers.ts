@@ -84,7 +84,8 @@ async function* streamOpenAI(env: Bindings, s: Settings, messages: ProviderMessa
   let buf = "";
   let finish: string | undefined;
   let yielded = 0;
-  for (;;) {
+  let streamError = "";
+  while (!streamError) {
     const { value, done } = await reader.read();
     if (done) break;
     buf += value;
@@ -96,7 +97,15 @@ async function* streamOpenAI(env: Bindings, s: Settings, messages: ProviderMessa
       const data = line.slice(5).trim();
       if (data === "[DONE]") continue;
       try {
-        const j = JSON.parse(data) as { choices?: { delta?: { content?: string | null }; finish_reason?: string | null }[] };
+        const j = JSON.parse(data) as {
+          error?: { message?: string };
+          choices?: { delta?: { content?: string | null }; finish_reason?: string | null }[];
+        };
+        // 200 으로 시작했어도 중간에 오류 이벤트가 올 수 있습니다. 끊긴 답을 정상 답처럼 저장하지 않도록 오류로 처리합니다.
+        if (j.error) {
+          streamError = j.error.message ?? JSON.stringify(j.error);
+          break;
+        }
         const c = j.choices?.[0];
         if (c?.finish_reason) finish = c.finish_reason;
         const piece = c?.delta?.content;
@@ -109,6 +118,9 @@ async function* streamOpenAI(env: Bindings, s: Settings, messages: ProviderMessa
       }
     }
   }
+  if (streamError) throw new Error(`OpenAI 오류: ${streamError.slice(0, 300)}`);
+  // 끝 표시(finish_reason) 없이 끊긴 스트림은 답이 중간에 잘린 것입니다.
+  if (yielded && !finish) throw new Error("OpenAI 답변이 끝나기 전에 연결이 끊겼습니다. 다시 질문해 보세요.");
   if (!yielded) throw new Error(finish === "length" ? "답변 길이 상한에 걸려 본문이 비었습니다. 설정에서 답변 길이 상한을 늘려 보세요." : "OpenAI 가 빈 답을 돌려줬습니다.");
   if (finish === "length") yield "\n\n…(답변 길이 상한에 걸려 여기서 끊겼습니다)";
 }
