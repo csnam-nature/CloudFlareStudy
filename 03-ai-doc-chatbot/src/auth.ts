@@ -160,7 +160,8 @@ export { isError as isAuthError };
 /** 모든 /api 요청 앞: 사용자를 확인해 c.get("user") 에 넣습니다. */
 export const identify: MiddlewareHandler<AppEnv> = async (c, next) => {
   const u = await identifyRequest(c.req.raw, c.env);
-  if (isError(u)) return c.json({ error: u.error }, u.status);
+  // 미등록·사용 중지(403) 등이어도 다른 계정으로 바꿀 수 있게 로그아웃 주소를 같이 줍니다.
+  if (isError(u)) return c.json({ error: u.error, logoutUrl: accessEnabled(c.env) ? logoutUrl(c.req.url) : null }, u.status);
   c.set("user", u);
   await next();
 };
@@ -182,6 +183,31 @@ export const requireAdmin = requireRole("admin");
 
 /** 예전 코드 호환: 관리자인지 */
 export const isAdmin = (c: Context<AppEnv>) => hasRole(c.get("user"), "admin");
+
+// ── 로그아웃 ──────────────────────────────────────────────
+
+/**
+ * Access 로그아웃 주소. 공식 문서(Session management → Log out as a user):
+ *   <앱 도메인>/cdn-cgi/access/logout 은 모든 Access 앱의 세션을 끊고 이 도메인의 인증 쿠키를 바로 지웁니다.
+ *   returnTo 로 끝난 뒤 돌아갈 주소를 줄 수 있습니다(같은 Access 계정의 앱 도메인·팀 도메인만 허용).
+ * 첫 화면으로 돌아가면 Access 로그인 화면(One-time PIN 등)이 다시 나옵니다.
+ */
+export const logoutUrl = (reqUrl: string) => `/cdn-cgi/access/logout?returnTo=${encodeURIComponent(new URL(reqUrl).origin + "/")}`;
+
+/**
+ * Access 는 앱에 적용했지만 ACCESS_TEAM_DOMAIN·ACCESS_AUD 를 아직 안 넣은 경우를 알아채려고,
+ * 들어온 Access 토큰의 이메일을 "서명 확인 없이" 읽습니다. 화면 안내용일 뿐 권한 판단에는 절대 쓰지 않습니다.
+ */
+export function peekAccessEmail(req: Request): string {
+  const token = req.headers.get("cf-access-jwt-assertion") || cookie(req, "CF_Authorization");
+  const p = token.split(".")[1];
+  if (!p) return "";
+  try {
+    return normEmail(b64urlJson<AccessClaims>(p).email);
+  } catch {
+    return "";
+  }
+}
 
 // ── 문서 공개 범위 ────────────────────────────────────────
 

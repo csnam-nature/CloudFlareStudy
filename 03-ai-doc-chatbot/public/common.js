@@ -36,6 +36,12 @@ export async function showMode(el, headers = {}) {
       // 로그인 만료(401)·사용 중지(403) 등: 이유를 배지에 보여 줍니다.
       el.textContent = res.status === 401 ? "로그인 필요" : "접근 불가";
       el.title = me.error ?? "";
+      // 미등록·사용 중지 계정이면 다른 계정으로 바꿀 수 있게 로그아웃만 보여 줍니다.
+      const who = $("#who");
+      if (who && me.logoutUrl) {
+        who.hidden = false;
+        who.innerHTML = `<span class="who-name muted">${esc(me.error ?? "")}</span>` + logoutButton(me.logoutUrl);
+      }
       toast(me.error ?? `서버 확인 실패 (${res.status})`);
       return null;
     }
@@ -62,9 +68,14 @@ export const isAccount = (me) => me?.authMode === "access" || me?.authMode === "
 export const hasRole = (me, min) => (RANK[me?.role] ?? 0) >= RANK[min];
 
 /**
- * 머리줄에 "누구로 로그인했는지"를 보여 주고, 역할에 맞지 않는 메뉴를 숨깁니다.
+ * 머리줄에 "누구로 로그인했는지"와 로그아웃 버튼을 보여 주고, 역할에 맞지 않는 메뉴를 숨깁니다.
  *   data-role="manager|admin"  그 역할 이상에게만 보임(계정 로그인일 때만. 토큰 방식은 토큰을 넣으러 가야 하므로 그대로 둠)
  *   data-auth="token"          관리자 토큰 방식일 때만 보임(토큰 입력 칸)
+ *
+ * 로그아웃은 방식마다 다릅니다.
+ *   access : Cloudflare Access 로그아웃(/cdn-cgi/access/logout) → 첫 화면으로 돌아오면 다시 로그인 화면
+ *   token  : 이 브라우저에 저장한 관리자 토큰을 지움
+ *   dev    : 로컬 개발용(.dev.vars 의 DEV_AUTH)이라 로그아웃이 없음
  */
 function applyUser(me) {
   const account = isAccount(me);
@@ -72,17 +83,53 @@ function applyUser(me) {
   for (const el of document.querySelectorAll("[data-auth=token]")) el.hidden = me.authMode !== "token";
   const who = $("#who");
   if (!who) return;
-  if (!account || !me.user) {
-    who.hidden = true;
+  who.hidden = false;
+
+  if (account && me.user) {
+    const label = me.user.name ? `${me.user.name} (${me.user.email})` : me.user.email;
+    who.innerHTML =
+      `<span class="who-name" title="${esc(me.user.email)}">👤 ${esc(label)}</span> <span class="badge role-${esc(me.user.role)}">${esc(me.user.roleLabel)}</span>` +
+      (me.authMode === "dev"
+        ? ` <span class="badge mock" title="DEV_AUTH=1 (localhost 전용). 로그아웃 없이 x-dev-user-email·DEV_USER_EMAIL 로 사람을 바꿉니다.">개발용 로그인</span>`
+        : "") +
+      logoutButton(me.logoutUrl);
     return;
   }
-  who.hidden = false;
-  const label = me.user.name ? `${me.user.name} (${me.user.email})` : me.user.email;
-  who.innerHTML =
-    `<span class="who-name" title="${esc(me.user.email)}">👤 ${esc(label)}</span> <span class="badge role-${esc(me.user.role)}">${esc(me.user.roleLabel)}</span>` +
-    (me.authMode === "dev" ? ` <span class="badge mock" title="DEV_AUTH=1 (localhost 전용)">개발용 로그인</span>` : "") +
-    (me.logoutUrl ? ` <a href="${esc(me.logoutUrl)}">로그아웃</a>` : "");
+
+  // Access 는 적용됐는데 Worker 설정값이 빠진 경우: 이메일은 보이지만 권한은 아직 예전 토큰 방식
+  if (me.accessUnconfigured) {
+    who.innerHTML =
+      `<span class="who-name" title="${esc(me.accessUnconfigured.email)}">👤 ${esc(me.accessUnconfigured.email)}</span>` +
+      ` <span class="badge failed" title="Access 로그인은 됐지만 Worker 에 ACCESS_TEAM_DOMAIN·ACCESS_AUD 가 없어 역할을 적용하지 못했습니다. wrangler.jsonc 에 넣고 다시 배포하세요(README 참고).">역할 미적용</span>` +
+      logoutButton(me.logoutUrl);
+    return;
+  }
+
+  // 관리자 토큰 방식(예전): 토큰을 저장했으면 "관리자 토큰", 아니면 익명
+  if (localStorage.getItem(TOKEN_KEY)) {
+    who.innerHTML =
+      `<span class="who-name" title="이 브라우저에 저장된 관리자 토큰으로 접속 중">🔑 관리자 토큰</span>` +
+      (me.admin ? ` <span class="badge role-admin">관리자</span>` : "") +
+      ` <button type="button" class="logout" data-clear-token>로그아웃</button>`;
+    who.querySelector("[data-clear-token]").addEventListener("click", () => {
+      if (!confirm("이 브라우저에 저장된 관리자 토큰을 지우고 로그아웃할까요?")) return;
+      localStorage.removeItem(TOKEN_KEY);
+      location.reload();
+    });
+  } else {
+    who.innerHTML = `<span class="who-name muted" title="로그인하지 않아 '전 직원' 공개 문서만 볼 수 있습니다">👤 로그인 안 함</span>`;
+  }
 }
+
+// Access 로그아웃을 누를 때도 이 브라우저에 저장된 관리자 토큰을 같이 지웁니다.
+// (Access 는 켰지만 Worker 설정값이 비어 토큰 방식으로 도는 경우, 다음 사람이 이전 관리자 토큰으로 들어가지 않게)
+document.addEventListener("click", (e) => {
+  if (e.target instanceof Element && e.target.closest("a.logout")) localStorage.removeItem(TOKEN_KEY);
+});
+
+/** Access 로그아웃 버튼(주소가 있을 때만) */
+const logoutButton = (url) =>
+  url ? ` <a class="logout" href="${esc(url)}" title="Cloudflare Access 에서 로그아웃합니다. 다시 들어오면 로그인(인증 코드)을 새로 해야 합니다.">로그아웃</a>` : "";
 
 /** 권한이 없는 화면에 들어왔을 때 안내 문구를 보여 줍니다. 볼 수 있으면 true */
 export function guardPage(me, min, mainSel = "main") {
