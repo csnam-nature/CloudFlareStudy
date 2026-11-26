@@ -136,23 +136,43 @@ async function unzipFallback(u8: Uint8Array): Promise<Record<string, Uint8Array>
     p += 46 + nameLen + extraLen + commentLen;
     if (!wanted(name)) continue;
     if (flags & 1) throw new Error("ZIP 자체에 암호가 걸려 있습니다");
-    total += usize;
-    if (total > MAX_UNZIPPED_BYTES) throw new TooBigError();
+    // ZIP 에 적힌 크기(usize)로 먼저 거르고, 실제로 푼 양도 다시 셉니다(적힌 크기는 거짓일 수 있음).
+    if (total + usize > MAX_UNZIPPED_BYTES) throw new TooBigError();
 
     const lh = local + shift;
     if (u32(lh) !== 0x04034b50) throw new Error(`${name} 의 위치 정보가 맞지 않습니다`);
     const start = lh + 30 + u16(lh + 26) + u16(lh + 28);
     const data = u8.subarray(start, start + csize);
     if (method === 0) out[name] = data.slice();
-    else if (method === 8) out[name] = await inflateRaw(data);
+    else if (method === 8) out[name] = await inflateRaw(data, MAX_UNZIPPED_BYTES - total);
     else throw new Error(`${name} 의 압축 방식(${method})을 지원하지 않습니다`);
+    total += out[name].byteLength;
+    if (total > MAX_UNZIPPED_BYTES) throw new TooBigError();
   }
   return out;
 }
 
-async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+/**
+ * deflate 압축을 풉니다. ZIP 에 적힌 크기는 믿지 않고, 실제로 풀려 나온 양을 세다가 limit 를 넘으면 바로 멈춥니다(압축 폭탄 방지).
+ */
+async function inflateRaw(data: Uint8Array, limit: number): Promise<Uint8Array> {
+  const reader = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      throw new TooBigError();
+    }
+    parts.push(value);
+  }
+  const out = new Uint8Array(size);
+  let o = 0;
+  for (const p of parts) out.set(p, o), (o += p.byteLength);
+  return out;
 }
 
 /** 본문 파일 순서: content.hpf 의 spine 순서를 따르고, 없으면 section 번호 순으로. */
