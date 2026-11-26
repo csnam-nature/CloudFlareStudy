@@ -100,25 +100,62 @@ function keywordBoost(text: string, words: string[]): number {
   return (0.5 * words.filter((w) => lower.includes(w)).length) / words.length;
 }
 
-export const SYSTEM_PROMPT = `당신은 네이처텍 사내 문서를 근거로 답하는 도우미입니다.
+/**
+ * 기본 시스템 프롬프트(설정 화면의 "기본값 불러오기"로 불러와 고칠 수 있음).
+ * "문서만 쓸지, 일반 지식도 쓸지" 같은 답변 방식 규칙은 여기에 넣지 않고 MODE_RULES 에서 자동으로 덧붙입니다.
+ * 그래서 프롬프트를 직접 고쳐도 질문창 옆 답변 모드가 그대로 동작합니다.
+ */
+export const SYSTEM_PROMPT = `당신은 네이처텍 사내 문서를 근거로 답하는 도우미입니다. 한국어로 답하세요.
 규칙:
-- 아래 [근거] 안의 내용만 사용해 한국어로 답하세요.
-- 근거에 답이 없으면 지어내지 말고 "등록된 문서에서 찾지 못했습니다."라고 답하세요.
-- 근거에 Markdown 표가 있으면 첫 줄(머리글)로 각 열의 뜻을 알고 행을 읽으세요.
+- [근거]에 Markdown 표가 있으면 첫 줄(머리글)로 각 열의 뜻을 알고 행을 읽으세요.
 - 질문이 회사명·모델명·코드처럼 짧은 낱말뿐이면, 근거에서 그 낱말이 들어 있는 행·문장을 찾아 정리해 보여 주세요.
-- 답의 근거가 된 부분 뒤에 [1], [2]처럼 근거 번호를 붙이세요.
+- [근거]를 쓴 부분 뒤에 [1], [2]처럼 근거 번호를 붙이세요.
 - 짧고 정확하게, 필요하면 목록으로 정리하세요.`;
 
+/** 질문창 옆에서 고르는 답변 모드 */
+export type AnswerMode = "docs" | "mixed" | "general";
+export const ANSWER_MODES: AnswerMode[] = ["docs", "mixed", "general"];
+export const toMode = (v: unknown): AnswerMode => (ANSWER_MODES.includes(v as AnswerMode) ? (v as AnswerMode) : "docs");
+
+/** 일반 정보(문서에 없는 내용)를 표시하는 문구. 화면·저장 파일에서도 이 문구로 구분합니다. */
+export const GENERAL_LABEL = "※ 등록 문서에 없는 일반 정보입니다.";
+
+/** 답변 모드별 규칙. 시스템 프롬프트(기본 또는 직접 고친 것) 뒤에 붙습니다. */
+export const MODE_RULES: Record<AnswerMode, string> = {
+  docs: `[답변 방식: 문서만] (위 규칙과 다르면 이 규칙을 따르세요)
+- [근거] 안의 내용만 사용하세요. 일반 지식이나 추측을 섞지 마세요.
+- 근거에 답이 없으면 지어내지 말고 "등록된 문서에서 찾지 못했습니다."라고 답하세요.`,
+  mixed: `[답변 방식: 문서 우선 + 일반 지식] (위 규칙과 다르면 이 규칙을 따르세요)
+- [근거]에 답이 있으면 근거를 먼저 쓰고 근거 번호를 붙이세요.
+- 근거에 없거나 부족한 내용은 일반 지식으로 보충해도 됩니다. 그 부분은 새 문단으로 시작하고 맨 앞에 "${GENERAL_LABEL}"라고 적으세요.
+- 근거(사내 문서)와 일반 지식이 다르면 근거를 따르고 차이를 알려 주세요.`,
+  general: `[답변 방식: 일반 질문] (위 규칙과 다르면 이 규칙을 따르세요)
+- 사내 문서 검색 없이 일반 지식으로 답하세요. 근거 번호는 붙이지 마세요.
+- 확실하지 않은 내용은 확실하지 않다고 말하세요.`,
+};
+
+/** 웹 검색을 켰을 때 덧붙이는 규칙 (Claude·OpenAI 의 자체 웹 검색 도구를 씀) */
+export const WEB_RULE = `[웹 검색]
+- 최신 정보가 필요하거나 [근거]와 일반 지식으로 부족하면 웹 검색 도구를 쓸 수 있습니다.
+- 웹에서 가져온 내용은 문장 앞에 "🌐"를 붙이고 [사이트 제목](URL) 형식으로 출처 링크를 적으세요.
+- 사내 문서 근거와 웹 내용이 다르면 사내 문서를 따르세요.`;
+
+export type PromptOptions = { systemPrompt?: string; mode?: AnswerMode; web?: boolean };
+
+/** 시스템 메시지 = (직접 고친 프롬프트 또는 기본) + 답변 모드 규칙 + (웹 검색 규칙) */
+export function buildSystem(o: PromptOptions = {}): string {
+  return [o.systemPrompt?.trim() || SYSTEM_PROMPT, MODE_RULES[o.mode ?? "docs"], o.web ? WEB_RULE : ""].filter(Boolean).join("\n\n");
+}
+
 /** LLM 에 보낼 메시지 목록: 시스템 규칙 + 최근 대화 몇 턴 + (근거 + 질문) */
-export function buildMessages(question: string, sources: Source[], history: ChatMessage[], systemPrompt = ""): ChatMessage[] {
+export function buildMessages(question: string, sources: Source[], history: ChatMessage[], o: PromptOptions = {}): ChatMessage[] {
+  const system = { role: "system" as const, content: buildSystem(o) };
+  // 일반 질문 모드는 검색을 하지 않으므로 질문만 보냅니다.
+  if (o.mode === "general") return [system, ...history, { role: "user", content: question }];
   const context = sources.length
     ? sources.map((s, i) => `[${i + 1}] (${s.docName}, 조각 ${s.seq + 1})\n${s.text}`).join("\n\n")
     : "(관련 근거를 찾지 못했습니다)";
-  return [
-    { role: "system", content: systemPrompt.trim() || SYSTEM_PROMPT },
-    ...history,
-    { role: "user", content: `[근거]\n${context}\n\n[질문]\n${question}` },
-  ];
+  return [system, ...history, { role: "user", content: `[근거]\n${context}\n\n[질문]\n${question}` }];
 }
 
 /**

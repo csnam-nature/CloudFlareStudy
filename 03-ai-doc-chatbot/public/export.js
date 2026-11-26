@@ -81,14 +81,14 @@ function splitRow(line) {
   return cells;
 }
 
-/** 글 안의 **굵게** 와 `코드` 를 조각으로 나눕니다. [{ text, bold, code }] */
+/** 글 안의 **굵게**, `코드`, [링크](https://…) 를 조각으로 나눕니다. [{ text, bold, code, href }] */
 function inlineRuns(text) {
   const runs = [];
-  const re = /\*\*(.+?)\*\*|`([^`]+)`/g;
+  const re = /\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/(?:[^()\s]|\([^()\s]*\))+)\)/g; // 주소 안의 괄호 한 겹까지 허용(위키백과 등)
   let last = 0;
   for (const m of text.matchAll(re)) {
     if (m.index > last) runs.push({ text: text.slice(last, m.index) });
-    runs.push(m[1] != null ? { text: m[1], bold: true } : { text: m[2], code: true });
+    runs.push(m[1] != null ? { text: m[1], bold: true } : m[2] != null ? { text: m[2], code: true } : { text: m[3], href: m[4] });
     last = m.index + m[0].length;
   }
   if (last < text.length) runs.push({ text: text.slice(last) });
@@ -157,7 +157,15 @@ export function exportItems(format, appTitle, items) {
 export function blocksToHtml(blocks) {
   const inline = (t) =>
     inlineRuns(t)
-      .map((r) => (r.bold ? `<b>${esc(r.text)}</b>` : r.code ? `<code>${esc(r.text)}</code>` : esc(r.text)))
+      .map((r) =>
+        r.bold
+          ? `<b>${esc(r.text)}</b>`
+          : r.code
+            ? `<code>${esc(r.text)}</code>`
+            : r.href
+              ? `<a href="${esc(r.href)}" target="_blank" rel="noopener noreferrer">${esc(r.text)}</a>`
+              : esc(r.text),
+      )
       .join("");
   return blocks
     .map((b) => {
@@ -220,7 +228,9 @@ function docxRuns(text, { bold = false, size } = {}) {
         r.code ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:shd w:val="clear" w:fill="F4F4F4"/>' : "",
         size ? `<w:sz w:val="${size}"/>` : "",
       ].join("");
-      return `<w:r>${props ? `<w:rPr>${props}</w:rPr>` : ""}<w:t xml:space="preserve">${xml(r.text)}</w:t></w:r>`;
+      // 링크는 Word 에서 "제목 (주소)" 로 적습니다.
+      const t = r.href ? `${r.text} (${r.href})` : r.text;
+      return `<w:r>${props ? `<w:rPr>${props}</w:rPr>` : ""}<w:t xml:space="preserve">${xml(t)}</w:t></w:r>`;
     })
     .join("");
 }

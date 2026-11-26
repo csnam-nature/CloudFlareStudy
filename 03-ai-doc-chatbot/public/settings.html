@@ -71,8 +71,18 @@ npx wrangler secret put ANTHROPIC_API_KEY</pre>
           <label>온도(temperature) <input name="temperature" type="number" min="0" max="1.5" step="0.1" /> <span class="muted">0 = 매번 같은 답, 높을수록 다양 · Workers AI 모델만 적용</span></label>
           <label>답변 길이 상한(max_tokens) <input name="maxTokens" type="number" min="128" max="4096" step="64" /> <span class="muted">클수록 긴 답 · Neurons 사용 증가 · 외부 AI 는 생각 토큰 때문에 최소 4096</span></label>
           <label>시스템 프롬프트 <span class="muted">— 비우면 기본 규칙</span>
-            <textarea name="systemPrompt" rows="6" placeholder=""></textarea>
+            <textarea name="systemPrompt" rows="8" placeholder=""></textarea>
           </label>
+          <div class="row">
+            <button type="button" id="loadDefaultPrompt">기본값 불러오기</button>
+            <span class="muted">기본 프롬프트를 칸에 채웁니다. 고친 뒤 [설정 저장]을 눌러야 적용됩니다.</span>
+          </div>
+          <details class="muted">
+            <summary>답변 모드 규칙 (자동으로 덧붙음)</summary>
+            <p>질문창 옆에서 고른 답변 모드의 규칙이 위 프롬프트 뒤에 자동으로 붙습니다. 그래서 프롬프트를 고쳐도 모드가 그대로 동작합니다. 규칙이 서로 다르면 모드 규칙을 따릅니다.</p>
+            <div id="modeRules"></div>
+          </details>
+          <label class="check"><input name="allowWebSearch" type="checkbox" /> 질문창의 🌐 웹 검색 허용 <span class="muted">— 답변 모델이 Claude·OpenAI 일 때만 동작 · 검색 1번마다 해당 회사에 요금(질문당 최대 3번)</span></label>
         </fieldset>
 
         <fieldset>

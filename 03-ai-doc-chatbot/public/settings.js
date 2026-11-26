@@ -65,6 +65,11 @@ function showSettings(s) {
   for (const k of ["appTitle", "temperature", "maxTokens", "topK", "minScore", "chunkSize", "chunkOverlap", "maxChunksPerDoc", "systemPrompt"])
     form.elements[k].value = s[k];
   form.elements.thinking.checked = s.thinking;
+  form.elements.allowWebSearch.checked = s.allowWebSearch;
+  const MODE_NAME = { docs: "📄 문서만", mixed: "📄+💡 문서 우선 + 일반 지식", general: "💡 일반 질문" };
+  $("#modeRules").innerHTML = Object.entries(settingsData.modeRules ?? {})
+    .map(([k, v]) => `<p><b>${esc(MODE_NAME[k] ?? k)}</b></p><pre>${esc(v)}</pre>`)
+    .join("");
   form.elements.systemPrompt.placeholder = "(비워 두면 기본 규칙을 씁니다)";
   $("#embedModel").textContent = settingsData.embedModel;
   showExternal();
@@ -103,6 +108,7 @@ form.addEventListener("submit", async (e) => {
     chatModel: modelValue("chatModel"),
     ocrModel: modelValue("ocrModel"),
     thinking: f.thinking.checked,
+    allowWebSearch: f.allowWebSearch.checked,
     temperature: Number(f.temperature.value),
     maxTokens: Number(f.maxTokens.value),
     topK: Number(f.topK.value),
@@ -145,3 +151,12 @@ $("#testModel").addEventListener("click", async () => {
 
 checkToken();
 loadSettings();
+
+// 기본 시스템 프롬프트를 칸에 채워 고칠 수 있게 합니다(저장은 [설정 저장]으로).
+$("#loadDefaultPrompt").addEventListener("click", () => {
+  const ta = form.elements.systemPrompt;
+  if (ta.value.trim() && ta.value.trim() !== settingsData.defaultSystemPrompt && !confirm("지금 칸의 내용을 기본 프롬프트로 바꿀까요?")) return;
+  ta.value = settingsData.defaultSystemPrompt ?? "";
+  ta.focus();
+  toast("기본 프롬프트를 불러왔습니다. 고친 뒤 [설정 저장]을 누르세요.");
+});

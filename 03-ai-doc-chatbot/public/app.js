@@ -12,6 +12,8 @@ import { createSidebar } from "./sidebar.js";
 
 const OLD_SESSION_KEY = "docChatbotSession"; // 폴더 기능 전의 "브라우저당 대화 하나" id
 const CURRENT_KEY = "docChatbotCurrent"; // 마지막으로 연 대화
+const MODE_KEY = "docChatbotMode"; // 답변 모드 (이 브라우저에 기억)
+const WEB_KEY = "docChatbotWeb"; // 웹 검색 켬/끔
 
 const list = $("#list");
 const scroller = $("#messages");
@@ -20,6 +22,8 @@ const input = $("#question");
 const sendBtn = $("#sendBtn");
 const conn = $("#conn");
 const docFilter = $("#docFilter");
+const modeSel = $("#answerMode");
+const webBox = $("#webSearch");
 
 /** id → { el, content, sources, question } : 화면에 그린 답변들 (Map 은 넣은 순서를 유지 = 대화 순서) */
 const answers = new Map();
@@ -188,6 +192,9 @@ function handle(m) {
       toast(m.message);
       setAnswering(false);
       break;
+    case "notice": // 답은 계속 만들지만 알려 둘 것 (예: 웹 검색을 못 써서 빼고 답함)
+      toast(m.message);
+      break;
   }
   scrollDown();
 }
@@ -271,9 +278,10 @@ function renderAnswer(a, typing) {
 
 /** 답변 Markdown → HTML: 제목·문단·목록·표·**굵게**·`코드` (export.js 와 같은 변환) + [1] 근거 표시 */
 function formatAnswer(text, nSources) {
-  return blocksToHtml(parseBlocks(text)).replace(/\[(\d+)\]/g, (m, n) =>
-    Number(n) >= 1 && Number(n) <= nSources ? `<span class="cite" data-n="${n}">${n}</span>` : m,
-  );
+  return blocksToHtml(parseBlocks(text))
+    .replace(/\[(\d+)\]/g, (m, n) => (Number(n) >= 1 && Number(n) <= nSources ? `<span class="cite" data-n="${n}">${n}</span>` : m))
+    // "※ 등록 문서에 없는 일반 정보입니다." 로 시작하는 문단은 눈에 띄게 표시
+    .replace(/<p>(※ 등록 문서에 없는 일반 정보입니다\.?)/g, '<p class="general-info"><b>$1</b>');
 }
 
 function scrollDown(force = false) {
@@ -287,7 +295,13 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text || answering) return;
-  const ask = { type: "ask", text, docId: docFilter.value ? Number(docFilter.value) : null };
+  const ask = {
+    type: "ask",
+    text,
+    docId: docFilter.value ? Number(docFilter.value) : null,
+    mode: modeSel.value,
+    web: webBox.checked && !webBox.disabled,
+  };
   input.value = "";
   autoGrow();
   if (currentId) return send(ask);
@@ -346,7 +360,38 @@ async function loadDocs() {
   }
 }
 
-showMode($("#mode")).then((me) => me?.appTitle && (appTitle = me.appTitle));
+showMode($("#mode")).then((me) => {
+  if (me?.appTitle) appTitle = me.appTitle;
+  // 웹 검색: Claude·OpenAI 모델이고 관리자가 허용했을 때만 켤 수 있음. 못 쓰면 이유를 툴팁으로 보여 줌
+  const w = me?.webSearch ?? { available: false, reason: "서버 정보를 읽지 못했습니다." };
+  webBox.disabled = !w.available;
+  $("#webWrap").classList.toggle("off", !w.available);
+  $("#webWrap").title = w.available ? "Claude·OpenAI 의 웹 검색 도구로 최신 정보를 찾아 출처 링크와 함께 답합니다(검색마다 요금)" : w.reason;
+});
+
+// ── 답변 모드 · 웹 검색 ────────────────────────────────
+
+const MODE_HINT = {
+  docs: "답변은 등록된 문서만 근거로 만듭니다.",
+  mixed: "문서를 먼저 찾고, 없는 내용은 일반 지식으로 보충합니다(※ 표시).",
+  general: "문서 검색 없이 일반 지식으로 답합니다.",
+};
+const PLACEHOLDER = {
+  docs: "문서에 대해 물어보세요. 예) E-21 오류는 무엇인가요?",
+  mixed: "문서와 일반 지식으로 답합니다. 예) E-21 오류 원인과 일반적인 점검 방법은?",
+  general: "무엇이든 물어보세요. 예) 전기차 완속·급속 충전 차이는?",
+};
+function applyMode() {
+  const m = modeSel.value;
+  $("#modeHint").textContent = MODE_HINT[m] + (webBox.checked && !webBox.disabled ? " 🌐 웹 검색 사용." : "");
+  input.placeholder = PLACEHOLDER[m];
+  docFilter.disabled = m === "general"; // 일반 질문은 문서 범위가 의미 없음
+}
+modeSel.value = MODE_HINT[localStorage.getItem(MODE_KEY)] ? localStorage.getItem(MODE_KEY) : "docs";
+webBox.checked = localStorage.getItem(WEB_KEY) === "1";
+modeSel.addEventListener("change", () => (localStorage.setItem(MODE_KEY, modeSel.value), applyMode()));
+webBox.addEventListener("change", () => (localStorage.setItem(WEB_KEY, webBox.checked ? "1" : "0"), applyMode()));
+applyMode();
 
 // 대화 전체 저장
 $("#saveAll").addEventListener("change", (e) => {
