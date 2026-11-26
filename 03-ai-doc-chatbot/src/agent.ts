@@ -98,7 +98,12 @@ export class ChatAgent extends Agent<Bindings> {
       await this.answer(question, msg.docId ? Number(msg.docId) : undefined);
     } catch (err) {
       console.error("답변 실패", err);
-      this.sendError(connection, `답변을 만들지 못했습니다: ${err instanceof Error ? err.message : String(err)}`);
+      const text = err instanceof Error ? err.message : String(err);
+      // 모델 접근 불가(5018)·지원 종료(5028)·유료 플랜 필요(5035)는 설정으로 고칠 수 있으므로 방법을 덧붙입니다.
+      const hint = /\b(5018|5028|5035)\b/.test(text)
+        ? ` (지금 모델 ${this.env.CHAT_MODEL} 을 쓸 수 없습니다. wrangler.jsonc 또는 .dev.vars 의 CHAT_MODEL 을 다른 모델로 바꾸고 다시 실행하세요)`
+        : "";
+      this.sendError(connection, `답변을 만들지 못했습니다: ${text}${hint}`);
     } finally {
       this.busy = false;
     }

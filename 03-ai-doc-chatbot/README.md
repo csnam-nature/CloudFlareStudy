@@ -138,12 +138,16 @@ npm run deploy                           # https://doc-chatbot.<계정>.workers.
 
 | 이름 | 기본값 | 설명 |
 | --- | --- | --- |
-| `CHAT_MODEL` | `@cf/google/gemma-3-12b-it` | 답변 모델. [모델 목록](https://developers.cloudflare.com/workers-ai/models/)에서 한국어가 되는 다른 텍스트 생성 모델로 바꿔 보세요. |
+| `CHAT_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | 답변 모델. Cloudflare 가 [무료 플랜에서 쓸 수 있다고 밝힌](https://developers.cloudflare.com/changelog/post/2026-07-28-models-require-workers-paid/) 모델입니다. 로컬에서는 `.dev.vars` 에 `CHAT_MODEL=...` 을 넣어 바꿔 볼 수 있습니다. |
 | `EMBED_MODEL` | `@cf/baai/bge-m3` | 다국어 임베딩(1024차원). 바꾸면 Vectorize 인덱스를 그 차원으로 다시 만들고 모든 문서를 다시 색인해야 합니다. |
 | `VECTOR_NAMESPACE` | `prod` (로컬은 `.dev.vars` 의 `dev`) | 같은 Vectorize 인덱스를 로컬과 배포본이 나눠 쓰기 위한 [네임스페이스](https://developers.cloudflare.com/vectorize/reference/metadata-filtering/#namespace-versus-metadata-filtering) |
 | `AI_GATEWAY_ID` | `doc-chatbot` | AI Gateway 이름. 비우면 게이트웨이 없이 호출 |
 | `MAX_UPLOAD_MB` | `10` | 업로드 크기 한도 |
 | `MAX_CHUNKS_PER_DOC` | `400` | 문서 하나의 청크 한도 (Vectorize 무료 한도 보호) |
+
+모델은 자주 바뀝니다. 답변이 `5018`(이 계정은 모델 사용 불가), `5028`(지원 종료), `5035`(유료 플랜 필요) 오류로 실패하면
+[모델 목록](https://developers.cloudflare.com/workers-ai/models/)과 [지원 종료 공지](https://developers.cloudflare.com/changelog/product/workers-ai/)를 보고 `CHAT_MODEL` 을 바꾸세요.
+채팅 화면에도 이 안내가 함께 표시됩니다.
 
 검색 개수(`TOP_K`), 관련도 기준(`MIN_SCORE`), 시스템 프롬프트는 `src/rag.ts`, 청크 크기는 `src/chunk.ts` 에 있습니다.
 진짜 모드로 처음 써 볼 때는 `MIN_SCORE.real`(0.35)이 너무 높거나 낮지 않은지, 화면의 근거 "유사도" 값을 보며 맞춰 보세요.

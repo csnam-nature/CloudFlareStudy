@@ -84,7 +84,9 @@
     // AI Gateway 이름. 대시보드 AI > AI Gateway 에서 같은 이름으로 만드세요. 비워 두면 게이트웨이 없이 호출합니다.
     "AI_GATEWAY_ID": "doc-chatbot",
     // 답변 모델과 임베딩 모델. 임베딩 모델을 바꾸면 Vectorize 인덱스 차원(1024)도 맞춰 다시 만들어야 합니다.
-    "CHAT_MODEL": "@cf/google/gemma-3-12b-it",
+    // gemma-4-26b-a4b-it 는 Cloudflare 가 무료 플랜에서 쓸 수 있다고 밝힌 모델입니다(gemma-3-12b-it 는 2026-05-30 지원 종료).
+    // 다른 모델을 시험할 때는 이 값을 고치거나, 로컬에서는 .dev.vars 에 CHAT_MODEL=... 을 넣어 덮어쓰세요.
+    "CHAT_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     "EMBED_MODEL": "@cf/baai/bge-m3",
     "MAX_UPLOAD_MB": "10",
     // 문서 하나의 최대 청크 수. Vectorize 무료 저장 한도(500만 차원 ≈ 1024차원 4,880개)를 지키기 위한 안전장치.
