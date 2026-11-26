@@ -88,7 +88,10 @@ async function ocrImage(env: Bindings, bytes: ArrayBuffer, contentType: string):
   })) as { response?: string; choices?: { message?: { content?: string | null }; finish_reason?: string }[] };
 
   const text = (res.response || res.choices?.[0]?.message?.content || "").trim();
-  if (res.choices?.[0]?.finish_reason === "length") console.warn("OCR 결과가 길이 한도에서 잘렸을 수 있습니다.");
+  // 출력 한도(max_tokens)에서 잘렸으면 일부만 색인되어 "성공"처럼 보이므로, 실패로 처리하고 이유를 알려 줍니다.
+  if (res.choices?.[0]?.finish_reason === "length") {
+    throw new Error("이미지 속 글자가 너무 많아 OCR 결과가 중간에 잘렸습니다. 이미지를 여러 장으로 나눠(예: 위·아래 반씩) 올려 주세요.");
+  }
   if (!text || text === "(글자 없음)") return "";
   return text;
 }
