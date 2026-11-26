@@ -82,7 +82,12 @@ conversations.delete("/folders/:id", async (c) => {
   let deleted = 0;
   if (c.req.query("withConversations") === "1") {
     const { results } = await c.env.DB.prepare("SELECT id FROM conversations WHERE folder_id = ? AND owner = ?").bind(id, owner).all<{ id: string }>();
-    for (const r of results) await clearAgent(c.env, r.id);
+    // 기록부터 지우고, 하나라도 실패하면 목록은 그대로 두어 다시 시도할 수 있게 합니다.
+    try {
+      for (const r of results) await clearAgent(c.env, r.id);
+    } catch {
+      return c.json({ error: "대화 기록을 지우지 못했습니다. 잠시 뒤 다시 시도하세요." }, 500);
+    }
     deleted = results.length;
     await c.env.DB.prepare("DELETE FROM conversations WHERE folder_id = ? AND owner = ?").bind(id, owner).run();
   }
@@ -148,18 +153,26 @@ conversations.patch("/:id", async (c) => {
 // 대화 삭제: 목록에서 빼고 에이전트의 대화 기록도 지웁니다.
 conversations.delete("/:id", async (c) => {
   const id = c.req.param("id");
-  const r = await c.env.DB.prepare("DELETE FROM conversations WHERE id = ? AND owner = ?").bind(id, c.get("owner")).run();
-  if (!r.meta.changes) return c.json({ error: "없는 대화입니다." }, 404);
-  await clearAgent(c.env, id);
+  const owner = c.get("owner");
+  const found = await c.env.DB.prepare("SELECT 1 FROM conversations WHERE id = ? AND owner = ?").bind(id, owner).first();
+  if (!found) return c.json({ error: "없는 대화입니다." }, 404);
+  // 기록을 먼저 지웁니다. 실패하면 목록에 남겨 두어 같은 삭제를 다시 시도할 수 있습니다.
+  try {
+    await clearAgent(c.env, id);
+  } catch {
+    return c.json({ error: "대화 기록을 지우지 못했습니다. 잠시 뒤 다시 시도하세요." }, 500);
+  }
+  await c.env.DB.prepare("DELETE FROM conversations WHERE id = ? AND owner = ?").bind(id, owner).run();
   return c.json({ ok: true });
 });
 
-/** 대화 id 의 ChatAgent 기록 지우기 (RPC) */
+/** 대화 id 의 ChatAgent 기록 지우기 (RPC). 실패하면 오류를 그대로 던집니다. */
 async function clearAgent(env: AppEnv["Bindings"], id: string) {
   try {
     const stub = await getAgentByName<AppEnv["Bindings"], ChatAgent>(env.ChatAgent as unknown as DurableObjectNamespace<ChatAgent>, id);
     await stub.clearHistory();
   } catch (e) {
     console.error("대화 기록 삭제 실패", id, e);
+    throw e;
   }
 }
