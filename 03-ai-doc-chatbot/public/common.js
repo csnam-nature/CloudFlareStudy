@@ -121,6 +121,12 @@ function applyUser(me) {
   }
 }
 
+// Access 로그아웃을 누를 때도 이 브라우저에 저장된 관리자 토큰을 같이 지웁니다.
+// (Access 는 켰지만 Worker 설정값이 비어 토큰 방식으로 도는 경우, 다음 사람이 이전 관리자 토큰으로 들어가지 않게)
+document.addEventListener("click", (e) => {
+  if (e.target instanceof Element && e.target.closest("a.logout")) localStorage.removeItem(TOKEN_KEY);
+});
+
 /** Access 로그아웃 버튼(주소가 있을 때만) */
 const logoutButton = (url) =>
   url ? ` <a class="logout" href="${esc(url)}" title="Cloudflare Access 에서 로그아웃합니다. 다시 들어오면 로그인(인증 코드)을 새로 해야 합니다.">로그아웃</a>` : "";
