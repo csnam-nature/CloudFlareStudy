@@ -34,7 +34,7 @@ async function upload(bytes, filename, headers = auth) {
 async function waitIndexed(id, timeoutMs = 30000) {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
-    const { documents } = await (await fetch(`${BASE}/api/documents`)).json();
+    const { documents } = await (await fetch(`${BASE}/api/documents`, { headers: auth })).json();
     const d = documents.find((x) => x.id === id);
     if (d && (d.status === "ready" || d.status === "failed")) return d;
     await sleep(500);
@@ -43,7 +43,16 @@ async function waitIndexed(id, timeoutMs = 30000) {
 }
 
 /** WebSocket 으로 질문 하나를 보내고 done(또는 error)까지 받은 메시지를 돌려줍니다. */
-function ask(session, text, docId, opts = {}) {
+/** 질문 하나. 분당 질문 제한(Rate Limiting)에 걸리면 1분 기다렸다가 한 번 더 보냅니다. */
+async function ask(session, text, docId, opts = {}) {
+  const got = await askOnce(session, text, docId, opts);
+  if (!/너무 잦습니다/.test(got.error ?? "")) return got;
+  console.log("   (분당 질문 제한에 걸려 61초 기다립니다)");
+  await new Promise((r) => setTimeout(r, 61000));
+  return askOnce(session, text, docId, opts);
+}
+
+function askOnce(session, text, docId, opts = {}) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${BASE.replace(/^http/, "ws")}/agents/chat-agent/${session}`);
     const got = { history: null, sources: null, answer: "", done: false, error: null, user: null, notice: null };
@@ -320,6 +329,42 @@ await new Promise((resolve) => {
   check("/api/me 에 웹 검색 가능 여부", me.webSearch && me.webSearch.available === false && !!me.webSearch.reason);
   const st = await (await fetch(`${BASE}/api/settings`, { headers: auth })).json();
   check("설정 API 에 기본 프롬프트·모드 규칙", st.defaultSystemPrompt?.includes("네이처텍") && !!st.modeRules?.mixed && st.settings.allowWebSearch === true);
+}
+
+// 12. 그룹별 문서 공개 범위 (관리자 토큰 방식: 토큰 없는 사람 = 익명 직원 = 전 직원 문서만)
+//     계정·역할(Access·개발용 로그인)은 scripts/smoke-auth.mjs 에서 따로 확인합니다.
+{
+  const json = async (path, method = "GET", body, headers = auth) => {
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: { ...headers, ...(body ? { "content-type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { status: res.status, data: await res.json().catch(() => ({})) };
+  };
+  check("사용자 API: 토큰 없으면 401", (await json("/api/users", "GET", null, {})).status === 401);
+  const g = await json("/api/groups", "POST", { name: `스모크팀-${Date.now()}` });
+  check("그룹 만들기", g.status === 201 && g.data.id > 0);
+  const secret = new TextEncoder().encode("# 스모크 비공개\n\n비밀코드ZQX 는 기술지원팀 전용 점검 절차입니다.\n");
+  const form = new FormData();
+  form.append("file", new Blob([secret], { type: "text/markdown" }), "group-only.md");
+  form.append("groupId", String(g.data.id));
+  const gu = await fetch(`${BASE}/api/documents`, { method: "POST", headers: auth, body: form });
+  const gdoc = await gu.json();
+  check("그룹 전용 문서 올리기", gu.status === 201 && gdoc.groupId === g.data.id, JSON.stringify(gdoc).slice(0, 120));
+  await waitIndexed(gdoc.id);
+  const anonList = (await json("/api/documents", "GET", null, {})).data.documents;
+  const adminList = (await json("/api/documents")).data.documents;
+  check("익명에게는 그룹 문서가 목록에 안 보임", !anonList.some((d) => d.id === gdoc.id) && adminList.some((d) => d.id === gdoc.id));
+  check("익명은 그룹 문서 원본 404", (await fetch(`${BASE}/api/documents/${gdoc.id}/file`)).status === 404);
+  const ga = await ask(crypto.randomUUID(), "비밀코드ZQX 는 무엇인가요?");
+  check("익명 채팅 검색에서도 그룹 문서는 빠짐", ga.done && !ga.sources.some((x) => x.docId === gdoc.id), JSON.stringify(ga.sources.map((x) => x.docName)));
+  check("문서가 있는 그룹은 삭제 거절(409)", (await json(`/api/groups/${g.data.id}`, "DELETE")).status === 409);
+  const pub = await json(`/api/documents/${gdoc.id}`, "PATCH", { groupId: null });
+  const ga2 = await ask(crypto.randomUUID(), "비밀코드ZQX 는 무엇인가요?");
+  check("전 직원 공개로 바꾸면 검색됨", pub.status === 200 && pub.data.groupId === null && ga2.sources.some((x) => x.docId === gdoc.id));
+  await fetch(`${BASE}/api/documents/${gdoc.id}`, { method: "DELETE", headers: auth });
+  check("빈 그룹 삭제", (await json(`/api/groups/${g.data.id}`, "DELETE")).status === 200);
 }
 
 console.log(failed ? `\n${failed}개 실패` : "\n모두 통과");

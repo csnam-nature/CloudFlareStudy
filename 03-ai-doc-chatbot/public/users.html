@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>사용자·그룹 · 네이처텍 문서 챗봇</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="top">
+    <h1>👥 사용자·그룹</h1>
+    <span id="mode" class="badge">확인 중…</span>
+    <span class="spacer"></span>
+    <span id="who" class="who" hidden></span>
+    <a href="/admin.html" data-role="manager">🗂️ 문서 관리</a>
+    <a href="/settings.html">⚙️ 설정</a>
+    <a href="/">← 채팅으로</a>
+  </header>
+
+  <main class="admin">
+    <section class="card" id="modeNote" hidden>
+      <h2>아직 Zero Trust Access 가 꺼져 있습니다</h2>
+      <p class="muted">지금은 관리자 토큰 방식이라 직원이 로그인하지 않습니다. 여기서 사용자·그룹을 미리 만들어 둘 수는 있지만,
+        역할과 그룹은 wrangler.jsonc 의 <code>ACCESS_TEAM_DOMAIN</code>·<code>ACCESS_AUD</code> 를 넣어 Access 를 켠 뒤에 적용됩니다(README 참고).
+        그룹은 지금도 문서 공개 범위로 쓸 수 있고, 로그인하지 않은 사람에게는 "전 직원" 문서만 보입니다.</p>
+      <form id="tokenForm" class="row" data-auth="token">
+        <input id="token" type="password" placeholder="ADMIN_TOKEN" autocomplete="off" style="min-width: 260px" />
+        <button class="primary" type="submit">토큰 저장</button>
+        <span id="tokenState" class="muted"></span>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2 style="margin: 0">그룹</h2>
+        <span class="muted">부서·팀 단위. 문서 관리에서 문서마다 공개할 그룹을 고릅니다(비우면 전 직원).</span>
+      </div>
+      <form id="groupForm" class="row" style="margin-top: 10px">
+        <input id="groupName" type="text" maxlength="40" placeholder="새 그룹 이름 (예: 기술지원팀)" />
+        <button class="primary" type="submit">그룹 만들기</button>
+      </form>
+      <div id="groupList" class="chips" style="margin-top: 10px"><span class="muted">불러오는 중…</span></div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2 style="margin: 0">사용자</h2>
+        <span class="spacer" style="flex: 1"></span>
+        <span id="userSummary" class="muted"></span>
+      </div>
+      <p class="muted" id="signupNote"></p>
+      <form id="userForm" class="row">
+        <input id="newEmail" type="text" placeholder="이메일 (예: hong@naturetec.kr)" style="min-width: 240px" />
+        <input id="newName" type="text" maxlength="60" placeholder="이름(선택)" />
+        <select id="newRole">
+          <option value="employee">직원</option>
+          <option value="manager">매니저</option>
+          <option value="admin">관리자</option>
+        </select>
+        <button class="primary" type="submit">미리 등록</button>
+      </form>
+      <table class="docs users" style="margin-top: 10px">
+        <colgroup>
+          <col />
+          <col style="width: 110px" />
+          <col style="width: 70px" />
+          <col />
+          <col style="width: 110px" class="hide-sm" />
+          <col style="width: 72px" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>이메일 · 이름</th>
+            <th>역할</th>
+            <th>사용</th>
+            <th>그룹</th>
+            <th class="hide-sm">마지막 접속</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="userRows"><tr><td colspan="6" class="muted">불러오는 중…</td></tr></tbody>
+      </table>
+      <p class="muted">역할: <b>관리자</b> 전부(설정·사용자 관리 포함) · <b>매니저</b> 문서 올리기·수정·삭제, 모든 문서 보기 · <b>직원</b> 채팅, 전 직원 문서와 자기 그룹 문서만 보기.
+        <code>ADMIN_EMAILS</code> 에 적힌 사람은 항상 관리자(🔒)이고, 자기 자신의 역할·사용 여부는 바꿀 수 없습니다.</p>
+    </section>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script src="/users.js" type="module"></script>
+</body>
+</html>

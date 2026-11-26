@@ -11,12 +11,14 @@
     <h1>🗂️ 문서 관리</h1>
     <span id="mode" class="badge">확인 중…</span>
     <span class="spacer"></span>
-    <a href="/settings.html">⚙️ 설정</a>
+    <span id="who" class="who" hidden></span>
+    <a href="/users.html" data-role="admin">👥 사용자·그룹</a>
+    <a href="/settings.html" data-role="admin">⚙️ 설정</a>
     <a href="/">← 채팅으로</a>
   </header>
 
   <main class="admin">
-    <section class="card">
+    <section class="card" data-auth="token">
       <h2>관리자 토큰</h2>
       <form id="tokenForm" class="row">
         <input id="token" type="password" placeholder="ADMIN_TOKEN" autocomplete="off" style="min-width: 260px" />
@@ -34,6 +36,11 @@
         여기에 파일을 끌어다 놓거나 눌러서 고르세요<br />
         <span class="muted">PDF · DOCX · 한글(HWPX) · 엑셀(XLSX·XLS) · CSV · TXT · MD · 이미지(JPG·PNG·WebP, OCR), 파일당 최대 <span id="maxMb">10</span>MB · 올린 뒤 몇 초~몇 분 안에 색인됩니다</span>
       </label>
+      <div class="row" style="margin-top: 8px">
+        <label for="uploadGroup">공개 범위</label>
+        <select id="uploadGroup"><option value="">전 직원</option></select>
+        <span class="muted">그룹을 고르면 그 그룹 사람(과 매니저·관리자)만 이 문서를 보고 검색합니다.</span>
+      </div>
       <div id="uploadLog" class="muted" style="margin-top: 8px"></div>
     </section>
 
@@ -52,6 +59,7 @@
           <col style="width: 80px" class="hide-sm" />
           <col style="width: 60px" />
           <col style="width: 84px" />
+          <col style="width: 130px" />
           <col style="width: 110px" class="hide-sm" />
           <col style="width: 300px" />
         </colgroup>
@@ -61,11 +69,12 @@
             <th class="hide-sm">크기</th>
             <th>청크</th>
             <th>상태</th>
+            <th>공개 범위</th>
             <th class="hide-sm">올린 시각</th>
             <th>관리</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td colspan="6" class="muted">불러오는 중…</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="7" class="muted">불러오는 중…</td></tr></tbody>
       </table>
     </section>
   </main>

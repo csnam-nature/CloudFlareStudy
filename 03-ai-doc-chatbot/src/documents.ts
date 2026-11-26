@@ -1,16 +1,19 @@
 // 문서 API: /api/documents
 //
-//   GET    /api/documents              목록 + 합계(누구나: 채팅 화면의 "문서 고르기"에도 씀)
-//   POST   /api/documents              업로드(관리자) → R2 저장 → D1 기록 → 큐에 색인 작업
-//   GET    /api/documents/:id/file     원본 열기·내려받기(누구나)
-//   PATCH  /api/documents/:id          이름 수정(관리자)
-//   POST   /api/documents/:id/reindex  다시 색인(관리자)
-//   DELETE /api/documents/:id          삭제(관리자): R2 원본, D1 행·청크, Vectorize 벡터 모두
+//   GET    /api/documents              목록 + 합계(로그인한 사람: 자기가 볼 수 있는 문서만. 채팅 화면의 "검색 범위"에도 씀)
+//   POST   /api/documents              업로드(매니저 이상) → R2 저장 → D1 기록 → 큐에 색인 작업
+//   GET    /api/documents/:id/file     원본 열기·내려받기(볼 수 있는 문서만)
+//   PATCH  /api/documents/:id          이름·공개 범위(그룹) 수정(매니저 이상)
+//   POST   /api/documents/:id/reindex  다시 색인(매니저 이상)
+//   DELETE /api/documents/:id          삭제(매니저 이상): R2 원본, D1 행·청크, Vectorize 벡터 모두
 //   DELETE /api/documents?confirm=all  모두 삭제(관리자): 실수로 부르지 않도록 confirm=all 이 있어야 합니다
+//
+// 공개 범위: documents.group_id 가 NULL 이면 전 직원, 숫자면 그 그룹 사람만 봅니다(매니저·관리자는 전부).
+// 직원에게 안 보이는 문서는 목록·원본 열기뿐 아니라 채팅 검색(src/rag.ts retrieve)에서도 빠집니다.
 
 import { Hono } from "hono";
 import { deleteVectors, extOf, isImageExt, SUPPORTED_EXT } from "./ai";
-import { type AppEnv, type Bindings, nowSec, requireAdmin } from "./auth";
+import { type AppEnv, type Bindings, canSeeDoc, docScope, nowSec, requireAdmin, requireRole, scopeSql } from "./auth";
 
 export const documents = new Hono<AppEnv>();
 
@@ -28,6 +31,8 @@ type DocRow = {
   created_at: number;
   updated_at: number;
   indexed_at: number | null;
+  group_id: number | null;
+  group_name: string | null; // groups 표와 JOIN 한 값
 };
 
 /** DB 행을 화면에 보낼 모양(camelCase)으로 바꿉니다. */
@@ -44,7 +49,19 @@ const toJson = (d: DocRow) => ({
   createdAt: d.created_at,
   updatedAt: d.updated_at,
   indexedAt: d.indexed_at,
+  groupId: d.group_id,
+  groupName: d.group_name,
 });
+
+const requireManager = requireRole("manager");
+
+/** 그룹 id 입력 확인: 빈 값·null = 전 직원(null), 없는 그룹이면 undefined */
+async function parseGroup(env: Bindings, v: unknown): Promise<number | null | undefined> {
+  if (v === null || v === undefined || v === "") return null;
+  const id = Number(v);
+  if (!Number.isInteger(id) || id <= 0) return undefined;
+  return (await env.DB.prepare("SELECT 1 FROM groups WHERE id = ?").bind(id).first()) ? id : undefined;
+}
 
 const CONTENT_TYPES: Record<string, string> = {
   pdf: "application/pdf",
@@ -63,20 +80,28 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 export async function getDoc(env: Bindings, id: number) {
-  return env.DB.prepare("SELECT * FROM documents WHERE id = ?").bind(id).first<DocRow>();
+  return env.DB.prepare("SELECT d.*, g.name AS group_name FROM documents d LEFT JOIN groups g ON g.id = d.group_id WHERE d.id = ?")
+    .bind(id)
+    .first<DocRow>();
 }
 
 const parseId = (s: string) => (/^\d+$/.test(s) ? Number(s) : NaN);
 
 // 목록
 documents.get("/", async (c) => {
-  const { results } = await c.env.DB.prepare("SELECT * FROM documents ORDER BY created_at DESC, id DESC LIMIT 500").all<DocRow>();
+  const vis = scopeSql(docScope(c.get("user")), "d");
+  const { results } = await c.env.DB.prepare(
+    `SELECT d.*, g.name AS group_name FROM documents d LEFT JOIN groups g ON g.id = d.group_id
+      WHERE 1 = 1${vis.sql} ORDER BY d.created_at DESC, d.id DESC LIMIT 500`,
+  )
+    .bind(...vis.args)
+    .all<DocRow>();
   const totalChunks = results.reduce((s, d) => s + d.chunk_count, 0);
   return c.json({ documents: results.map(toJson), totalChunks });
 });
 
-// 업로드 (multipart/form-data: file, name?)
-documents.post("/", requireAdmin, async (c) => {
+// 업로드 (multipart/form-data: file, name?, groupId?)
+documents.post("/", requireManager, async (c) => {
   const form = await c.req.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File)) return c.json({ error: "file 필드에 파일을 넣어 주세요." }, 400);
@@ -95,16 +120,18 @@ documents.post("/", requireAdmin, async (c) => {
   if (isImageExt(ext) && file.size > maxImageMb * 1024 * 1024)
     return c.json({ error: `이미지는 ${maxImageMb}MB 까지 올릴 수 있습니다. 해상도를 줄여서 올려 주세요.` }, 413);
 
+  const groupId = await parseGroup(c.env, form?.get("groupId"));
+  if (groupId === undefined) return c.json({ error: "없는 그룹입니다. 사용자·그룹 화면에서 확인하세요." }, 400);
   const name = String(form?.get("name") ?? "").trim() || file.name.replace(/\.[^.]+$/, "");
   const now = nowSec();
   const contentType = CONTENT_TYPES[ext];
 
   // 1) D1 에 먼저 기록해 id 를 받고, 그 id 로 R2 키를 정합니다.
   const row = await c.env.DB.prepare(
-    `INSERT INTO documents (name, filename, r2_key, content_type, size, status, created_at, updated_at)
-     VALUES (?, ?, '', ?, ?, 'queued', ?, ?) RETURNING id`,
+    `INSERT INTO documents (name, filename, r2_key, content_type, size, status, created_at, updated_at, group_id)
+     VALUES (?, ?, '', ?, ?, 'queued', ?, ?, ?) RETURNING id`,
   )
-    .bind(name.slice(0, 200), file.name.slice(0, 255), contentType, file.size, now, now)
+    .bind(name.slice(0, 200), file.name.slice(0, 255), contentType, file.size, now, now, groupId)
     .first<{ id: number }>();
   const id = row!.id;
   const key = `docs/${id}.${ext}`;
@@ -123,7 +150,8 @@ documents.post("/", requireAdmin, async (c) => {
 // 원본 열기 (?download=1 이면 내려받기)
 documents.get("/:id/file", async (c) => {
   const doc = await getDoc(c.env, parseId(c.req.param("id")));
-  if (!doc) return c.json({ error: "문서를 찾을 수 없습니다." }, 404);
+  // 볼 수 없는 문서는 "없는 문서"와 똑같이 답합니다(있다는 사실도 알리지 않음).
+  if (!doc || !canSeeDoc(docScope(c.get("user")), doc.group_id)) return c.json({ error: "문서를 찾을 수 없습니다." }, 404);
   const obj = await c.env.FILES.get(doc.r2_key);
   if (!obj) return c.json({ error: "원본 파일이 없습니다." }, 404);
   const disposition = c.req.query("download") ? "attachment" : "inline";
@@ -137,21 +165,32 @@ documents.get("/:id/file", async (c) => {
   });
 });
 
-// 이름 수정
-documents.patch("/:id", requireAdmin, async (c) => {
+// 이름·공개 범위 수정 ({ name?, groupId? }, groupId: null = 전 직원)
+documents.patch("/:id", requireManager, async (c) => {
   const id = parseId(c.req.param("id"));
-  const body = await c.req.json<{ name?: string }>().catch(() => ({}) as { name?: string });
-  const name = String(body.name ?? "").trim();
-  if (!name) return c.json({ error: "이름을 입력해 주세요." }, 400);
-  const res = await c.env.DB.prepare("UPDATE documents SET name = ?, updated_at = ? WHERE id = ?")
-    .bind(name.slice(0, 200), nowSec(), id)
+  const body = await c.req.json<{ name?: string; groupId?: number | null }>().catch(() => ({}) as { name?: string; groupId?: number | null });
+  const sets: string[] = [];
+  const args: unknown[] = [];
+  if (body.name !== undefined) {
+    const name = String(body.name ?? "").trim();
+    if (!name) return c.json({ error: "이름을 입력해 주세요." }, 400);
+    sets.push("name = ?"), args.push(name.slice(0, 200));
+  }
+  if (body.groupId !== undefined) {
+    const g = await parseGroup(c.env, body.groupId);
+    if (g === undefined) return c.json({ error: "없는 그룹입니다." }, 400);
+    sets.push("group_id = ?"), args.push(g);
+  }
+  if (!sets.length) return c.json({ error: "바꿀 내용이 없습니다." }, 400);
+  const res = await c.env.DB.prepare(`UPDATE documents SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`)
+    .bind(...args, nowSec(), id)
     .run();
   if (!res.meta.changes) return c.json({ error: "문서를 찾을 수 없습니다." }, 404);
   return c.json(toJson((await getDoc(c.env, id))!));
 });
 
 // 다시 색인 (청크 크기를 바꿨거나, 실패한 문서를 다시 시도할 때)
-documents.post("/:id/reindex", requireAdmin, async (c) => {
+documents.post("/:id/reindex", requireManager, async (c) => {
   const id = parseId(c.req.param("id"));
   const res = await c.env.DB.prepare("UPDATE documents SET status = 'queued', error = NULL, updated_at = ? WHERE id = ?")
     .bind(nowSec(), id)
@@ -162,7 +201,7 @@ documents.post("/:id/reindex", requireAdmin, async (c) => {
 });
 
 // 삭제
-documents.delete("/:id", requireAdmin, async (c) => {
+documents.delete("/:id", requireManager, async (c) => {
   const id = parseId(c.req.param("id"));
   const doc = await getDoc(c.env, id);
   if (!doc) return c.json({ error: "문서를 찾을 수 없습니다." }, 404);
