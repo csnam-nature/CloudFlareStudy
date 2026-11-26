@@ -84,7 +84,7 @@ function splitRow(line) {
 /** 글 안의 **굵게**, `코드`, [링크](https://…) 를 조각으로 나눕니다. [{ text, bold, code, href }] */
 function inlineRuns(text) {
   const runs = [];
-  const re = /\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  const re = /\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/(?:[^()\s]|\([^()\s]*\))+)\)/g; // 주소 안의 괄호 한 겹까지 허용(위키백과 등)
   let last = 0;
   for (const m of text.matchAll(re)) {
     if (m.index > last) runs.push({ text: text.slice(last, m.index) });

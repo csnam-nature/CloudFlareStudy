@@ -179,7 +179,9 @@ function claudeWebTool(model: string) {
 /** 웹 출처 목록을 답 끝에 붙일 Markdown 으로 */
 function webSourcesMarkdown(list: Map<string, string>): string {
   if (!list.size) return "";
-  const lines = [...list].slice(0, 8).map(([url, title]) => `- [${(title || url).replace(/[[\]]/g, "")}](${url})`);
+  // 주소의 괄호는 %28 %29 로 바꿔 Markdown 링크가 중간에서 끊기지 않게 합니다.
+  const safe = (u: string) => u.replace(/\(/g, "%28").replace(/\)/g, "%29");
+  const lines = [...list].slice(0, 8).map(([url, title]) => `- [${(title || url).replace(/[[\]]/g, "")}](${safe(url)})`);
   return `\n\n🌐 **웹 출처**\n${lines.join("\n")}`;
 }
 
@@ -237,6 +239,7 @@ async function* streamOpenAIWeb(env: Bindings, s: Settings, messages: ProviderMe
       stream: true,
       max_output_tokens: maxTokens,
       reasoning: { effort: s.thinking ? "medium" : "low" },
+      max_tool_calls: WEB_MAX_USES, // 검색 횟수 상한(Claude 와 같게 3번)
       tools: [{ type: "web_search", user_location: { type: "approximate", country: "KR", timezone: "Asia/Seoul" } }],
     }),
   });
