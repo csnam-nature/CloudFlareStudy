@@ -40,7 +40,7 @@
 ```
 [업로드]  관리자 화면 ─► POST /api/documents ─► R2 put(docs/<id>.<확장자>) ─► D1 documents(queued)
                                              └─► Queue send({ docId })  ← 응답은 여기서 바로 끝
-[색인]    Queue 소비자 ─► R2 get ─► 텍스트 추출 (TXT·MD 그대로, CSV 는 표로 / PDF·DOCX·엑셀은 AI.toMarkdown)
+[색인]    Queue 소비자 ─► R2 get ─► 텍스트 추출 (TXT·MD 그대로, CSV·HWPX 는 직접 변환 / PDF·DOCX·엑셀은 AI.toMarkdown / 이미지는 비전 모델 OCR)
                        ─► 청크 분할 ─► AI.run(bge-m3) 임베딩 ─► Vectorize upsert(id "문서id:순번")
                        ─► D1 chunks 에 원문 저장 ─► documents.status = ready (실패하면 2번 더 시도 후 failed)
 
@@ -66,7 +66,7 @@
 | --- | --- | --- |
 | GET | `/api/me` | 관리자 여부, 연습 모드 여부, 모델 이름 |
 | GET | `/api/documents` | 문서 목록 + 전체 청크 수 |
-| POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`). PDF·DOCX·XLSX·XLSM·XLS·CSV·TXT·MD, 10MB 까지 (관리자) |
+| POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`). PDF·DOCX·HWPX·XLSX·XLSM·XLS·CSV·TXT·MD 10MB, JPG·PNG·WebP 4MB 까지 (관리자) |
 | GET | `/api/documents/:id/file` | 원본 열기, `?download=1` 이면 내려받기 |
 | PATCH | `/api/documents/:id` | 이름 수정. 본문 `{ "name": "..." }` (관리자) |
 | POST | `/api/documents/:id/reindex` | 다시 색인 (관리자) |
@@ -81,7 +81,7 @@
 
 Workers AI 와 Vectorize 는 로컬 흉내가 없어서 `wrangler dev` 에서도 실제 Cloudflare 리소스를 씁니다.
 그래서 먼저 **AI 없이 화면과 흐름을 확인하는 연습 모드**를 둡니다(`wrangler.jsonc` 의 `env.mock`).
-가짜 임베딩(글자 조각 해시)과 D1 안의 단순 검색, "가장 비슷한 근거 문단을 그대로 보여 주는" 가짜 답변을 씁니다. TXT·MD 만 색인됩니다.
+가짜 임베딩(글자 조각 해시)과 D1 안의 단순 검색, "가장 비슷한 근거 문단을 그대로 보여 주는" 가짜 답변을 씁니다. TXT·MD·CSV·HWPX 만 색인됩니다(AI 가 필요 없는 형식). 연습 모드는 답을 "쓰지" 않습니다. 질문 단어가 들어 있는 조각을 앞으로 올려 가장 비슷한 문단(표이면 맞는 행만)을 그대로 보여 줄 뿐이라, "SK시그넷 모델은?"처럼 문서에 있는 단어로 물어야 잘 찾습니다.
 
 ```powershell
 cd D:\04_Study\IT기술\CloudFlare\CloudFlareStudy\03-ai-doc-chatbot
@@ -143,7 +143,9 @@ npm run deploy                           # https://doc-chatbot.<계정>.workers.
 | `EMBED_MODEL` | `@cf/baai/bge-m3` | 다국어 임베딩(1024차원). 바꾸면 Vectorize 인덱스를 그 차원으로 다시 만들고 모든 문서를 다시 색인해야 합니다. |
 | `VECTOR_NAMESPACE` | `prod` (로컬은 `.dev.vars` 의 `dev`) | 같은 Vectorize 인덱스를 로컬과 배포본이 나눠 쓰기 위한 [네임스페이스](https://developers.cloudflare.com/vectorize/reference/metadata-filtering/#namespace-versus-metadata-filtering) |
 | `AI_GATEWAY_ID` | `doc-chatbot` | AI Gateway 이름. 비우면 게이트웨이 없이 호출 |
+| `OCR_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | 이미지 글자 읽기(OCR)용 비전 모델 |
 | `MAX_UPLOAD_MB` | `10` | 업로드 크기 한도 |
+| `MAX_IMAGE_MB` | `4` | 이미지 업로드 크기 한도 (base64 로 모델에 보내므로 작게) |
 | `MAX_CHUNKS_PER_DOC` | `400` | 문서 하나의 청크 한도 (Vectorize 무료 한도 보호) |
 
 모델은 자주 바뀝니다. 답변이 `5018`(이 계정은 모델 사용 불가), `5028`(지원 종료), `5035`(유료 플랜 필요) 오류로 실패하면
@@ -152,6 +154,8 @@ npm run deploy                           # https://doc-chatbot.<계정>.workers.
 
 검색 개수(`TOP_K`), 관련도 기준(`MIN_SCORE`), 시스템 프롬프트는 `src/rag.ts`, 청크 크기는 `src/chunk.ts` 에 있습니다.
 진짜 모드로 처음 써 볼 때는 `MIN_SCORE.real`(0.35)이 너무 높거나 낮지 않은지, 화면의 근거 "유사도" 값을 보며 맞춰 보세요.
+
+검색은 **하이브리드**입니다. 벡터 검색(뜻이 비슷한 조각)에 더해, 질문 단어가 글자 그대로 들어 있는 조각을 D1 에서 찾아(`instr`) 후보에 넣고, 단어가 들어 있는 비율만큼 점수를 더해 다시 줄을 세웁니다. "SK시그넷"처럼 회사명·모델명·코드만 물으면 큰 표 조각과의 벡터 유사도가 기준(0.35)보다 낮게 나와 근거가 0개가 되고 "등록된 문서에서 찾지 못했습니다"가 나오기 쉬운데, 키워드 쪽이 이것을 잡아 줍니다. `npm run dev` 터미널에 `검색: 문서이름#조각(점수, 키워드)` 로그가 찍히니, 답이 이상하면 어떤 근거가 뽑혔는지 먼저 보세요.
 
 ## 무료 한도 주의점 (2026-11-25 공식 문서 기준)
 
@@ -167,6 +171,8 @@ npm run deploy                           # https://doc-chatbot.<계정>.workers.
 
 - 무료 플랜 Worker 는 호출당 CPU 10ms 제한이 있지만, AI·DB 응답을 **기다리는 시간은 포함되지 않습니다.** 아주 큰 문서의 청크 분할은 CPU 를 쓰므로, 수백 쪽 문서는 나눠 올리는 편이 안전합니다.
 - 엑셀은 `toMarkdown` 이 시트를 Markdown 표로 바꾸고, 큰 표는 행 단위로 잘라 조각마다 머리글 행을 다시 붙입니다(`src/chunk.ts`). 그래서 첫 행에 열 이름이 있는 시트가 검색이 잘 됩니다. 차트·이미지 같은 표 밖의 내용은 색인되지 않을 수 있습니다. CSV 는 AI 없이 직접 표로 바꾸고, 엑셀에서 저장한 한국어 CSV(CP949)도 읽습니다.
+- **한글(HWPX)** 은 ZIP 안의 XML(`Contents/section*.xml`)을 직접 읽어 문단은 글로, 표는 Markdown 표로 바꿉니다(`src/hwpx.ts`, AI 불필요라 연습 모드에서도 됩니다). 공문서 표 모양도 정리합니다: 칸 하나짜리 제목 상자와 맨 위·아래의 가로 전체 병합 행(표 제목, ※ 비고)은 글로 빼고, 두 줄로 병합된 머리글은 열마다 합치며("충전기 모델명"), 세로로 병합된 칸(같은 제조사의 여러 모델)은 행마다 다시 적습니다. 예전 형식 **HWP 는 지원하지 않으니** 한글에서 [다른 이름으로 저장] → HWPX(또는 PDF)로 저장해 올리세요. 암호를 걸었거나 배포용으로 저장한 문서는 읽을 수 없습니다. 그림 속 글자는 색인되지 않습니다.
+- **이미지(JPG·PNG·WebP)** 는 비전 모델에 "보이는 글자를 그대로 옮겨 적어라(표는 Markdown 표로)"라고 요청해 얻은 글을 색인합니다(`src/ai.ts` 의 `ocrImage`). 스캔한 매뉴얼 페이지, 화면 캡처, 오류 코드표 사진에 쓸 수 있습니다. 모델이 읽는 것이라 틀린 글자가 있을 수 있으니, 중요한 문서는 관리 화면의 "열기"로 원본과 비교해 보세요. 이미지 한 장의 OCR 은 Neurons 를 꽤 쓰므로 무료 한도를 생각해 필요한 이미지만 올리세요. 연습 모드에서는 비전 모델이 없어 "실패"로 표시됩니다.
 - [지원 형식](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/supported-formats/)의 다른 형식(ODT, ODS, HTML 등)도 `SUPPORTED_EXT` 와 `CONTENT_TYPES` 에 추가하면 쓸 수 있습니다.
 - 문서 변환(`toMarkdown`)은 현재 베타입니다. 스캔 이미지로 된 PDF 는 텍스트가 없어 "텍스트를 찾지 못했습니다"로 실패합니다.
 
@@ -180,4 +186,4 @@ R2 에 파일을 올리기만 하면 되고, 검색은 바인딩 호출 한 번�
 
 - 검색을 에이전트의 "도구(tool)"로 바꿔 LLM 이 필요할 때만 검색하게 하기 (에이전트형 RAG)
 - AI Gateway 에서 Claude·OpenAI 같은 외부 모델로 바꿔 답변 품질 비교하기
-- 하이브리드 검색: 오류 코드(E-21) 같은 정확한 단어는 D1 FTS5 전문 검색, 의미 검색은 Vectorize 로 함께 쓰기
+- 하이브리드 검색 고도화: 지금의 단순 글자 검색(`instr`) 대신 D1 FTS5 전문 검색과 점수(BM25)를 쓰기
