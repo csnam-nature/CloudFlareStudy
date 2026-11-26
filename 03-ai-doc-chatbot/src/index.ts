@@ -29,6 +29,8 @@ import {
   type IndexJob,
   isAuthError,
   isMock,
+  logoutUrl,
+  peekAccessEmail,
   ROLE_LABEL,
 } from "./auth";
 import { conversations } from "./conversations";
@@ -54,6 +56,9 @@ app.get("/api/me", async (c) => {
   const s = await getSettings(c.env);
   const u = c.get("user");
   const mode = authMode(c.env, u);
+  // Access 를 앱에 적용했는데 Worker 설정값(ACCESS_TEAM_DOMAIN·ACCESS_AUD)이 비어 있으면
+  // 예전 토큰 방식으로 돌아가 계정이 안 보입니다. 그 경우를 화면에 알려 주려고 이메일만(검증 없이) 읽습니다.
+  const accessEmail = mode === "token" ? peekAccessEmail(c.req.raw) : "";
   return c.json({
     // 로그인 방식: access(Zero Trust) · dev(로컬 개발용 우회) · token(관리자 토큰, 예전 방식)
     authMode: mode,
@@ -61,7 +66,10 @@ app.get("/api/me", async (c) => {
     role: u.role,
     admin: hasRole(u, "admin"),
     canManageDocs: hasRole(u, "manager"),
-    logoutUrl: mode === "access" ? "/cdn-cgi/access/logout" : null,
+    // 로그아웃: Access 면 Access 로그아웃 주소, 토큰 방식은 화면에서 토큰을 지움, 개발용은 없음
+    logoutUrl: mode === "access" || accessEmail ? logoutUrl(c.req.url) : null,
+    // Access 는 켜져 있지만 Worker 설정값이 빠졌을 때만: { email } (안내용, 권한에는 안 씀)
+    accessUnconfigured: accessEmail ? { email: accessEmail } : null,
     mock: isMock(c.env),
     appTitle: s.appTitle,
     chatModel: s.chatModel,
