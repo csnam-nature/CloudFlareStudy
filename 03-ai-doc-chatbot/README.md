@@ -22,7 +22,8 @@
 ├── public/                   # 정적 화면 (빌드 없음)
 │   ├── index.html · app.js   # 채팅 화면 (순수 WebSocket)
 │   ├── sidebar.js            # 왼쪽 사이드바: 폴더·대화 목록
-│   ├── admin.html · admin.js # 문서 관리 화면 (업로드·목록·열기·이름 수정·다시 색인·삭제·설정)
+│   ├── admin.html · admin.js # 문서 관리 화면 (업로드·목록·열기·이름 수정·다시 색인·삭제)
+│   ├── settings.html · settings.js # 설정 화면 (모델·외부 AI 키 상태·검색·색인 값)
 │   ├── export.js             # 답변 저장: Markdown · Word(.docx) · PDF(인쇄)
 │   ├── common.js · style.css
 ├── src/
@@ -34,7 +35,8 @@
 │   ├── agent.ts              # ChatAgent (Agents SDK): 대화 기록, 답변 스트리밍, Rate Limiting
 │   ├── ai.ts                 # Workers AI · AI Gateway · Vectorize 호출, 연습 모드 가짜 구현
 │   ├── conversations.ts      # 대화 목록·폴더 API
-│   ├── settings.ts           # 관리 화면 설정(모델·검색·청크) 저장·API
+│   ├── settings.ts           # 설정(모델·검색·청크) 저장·API
+│   ├── providers.ts          # 외부 AI 답변: OpenAI · Anthropic Claude (AI Gateway 경유)
 │   ├── hwpx.ts               # 한글 HWPX → Markdown
 │   └── auth.ts               # 관리자 토큰, 공용 타입
 ├── samples/charger-error-codes.md  # 시험용 가상 오류 코드 문서
@@ -75,7 +77,7 @@
 | GET | `/api/conversations` | 내 폴더·대화 목록 (헤더 `X-Client-Id`) |
 | POST · PATCH · DELETE | `/api/conversations/folders[/:id]` | 폴더 만들기·이름 바꾸기·삭제(`?withConversations=1` 이면 대화도 삭제) |
 | POST · PATCH · DELETE | `/api/conversations[/:id]` | 대화 등록·제목/폴더 바꾸기·삭제(기록도 지움) |
-| GET · PUT · DELETE | `/api/settings` | 설정 읽기 · 일부 바꾸기 · 모두 기본값으로 (관리자) |
+| GET · PUT · DELETE | `/api/settings` | 설정 읽기(외부 AI 키 유무 포함) · 일부 바꾸기 · 모두 기본값으로 (관리자) |
 | POST | `/api/settings/test` | 모델 시험. 본문 `{ "model": "@cf/..." }` (관리자) |
 | GET | `/api/documents` | 문서 목록 + 전체 청크 수 |
 | POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`). PDF·DOCX·HWPX·XLSX·XLSM·XLS·CSV·TXT·MD 10MB, JPG·PNG·WebP 4MB 까지 (관리자) |
@@ -159,20 +161,43 @@ ChatGPT·Claude 대화창처럼 왼쪽에 대화 목록이 있습니다.
 - 목록은 D1(`folders`, `conversations`)에 저장되지만, 로그인이 없어서 **브라우저마다 따로**입니다(localStorage 의 무작위 id 를 `X-Client-Id` 로 보냄). 다른 PC·브라우저에서는 보이지 않습니다. 사람별로 묶으려면 Cloudflare Access 를 앞에 두고 로그인 이메일을 owner 로 쓰도록 바꾸면 됩니다.
 - 폴더 기능 전에 쓰던 대화가 있으면 처음 열 때 "이전 대화"로 목록에 들어갑니다.
 
-## 관리 화면의 "설정"
+## 설정 화면 (`/settings.html`)
 
-문서 관리 화면 맨 아래 **설정** 섹션(관리자 토큰 필요)에서 다시 배포하지 않고 바꿀 수 있습니다. 값은 D1 `settings` 표에 저장되고, 저장하지 않은 항목은 아래 `vars` 가 기본값입니다.
+채팅 화면 위쪽 ⚙️ 또는 문서 관리 화면의 **⚙️ 설정** 링크로 들어가는 별도 화면(관리자 토큰 필요)에서 다시 배포하지 않고 바꿀 수 있습니다. 값은 D1 `settings` 표에 저장되고, 저장하지 않은 항목은 아래 `vars` 가 기본값입니다.
 
 | 묶음 | 항목 |
 | --- | --- |
 | 화면 | 화면 제목 (기본 "네이처텍 문서 챗봇") |
-| 답변 AI 모델 | 답변 모델(목록에서 고르기 또는 직접 입력) · **[선택한 모델 시험]** 버튼 · 생각(reasoning) 모드 · 온도 · 답변 길이 상한 · 시스템 프롬프트 |
+| 외부 AI 연결 | OpenAI · Claude API 키가 들어 있는지(✅/❌), AI Gateway 사용 여부, 키 넣는 방법 |
+| 답변 AI 모델 | 답변 모델(Workers AI · Claude · OpenAI 중에서 고르기 또는 직접 입력) · **[선택한 모델 시험]** 버튼 · 생각(reasoning) 모드 · 온도 · 답변 길이 상한 · 시스템 프롬프트 |
 | 검색 | 근거 조각 수(topK) · 관련도 기준(minScore) |
 | 색인 | 이미지 OCR 모델 · 조각 크기 · 조각 겹침 · 문서당 조각 수 한도 |
 
 - 모델 목록은 2026-11 기준 무료 플랜에서 쓸 수 있고 [지원 종료 예정](https://developers.cloudflare.com/changelog/post/2026-11-05-planned-model-deprecations/)이 아닌 모델입니다. 모델은 자주 바뀌므로 바꾸기 전에 **[선택한 모델 시험]** 으로 이 계정에서 실제로 되는지 확인하세요.
 - 색인 항목(OCR 모델·조각 크기)은 새로 올리거나 "다시 색인"하는 문서부터 적용됩니다.
 - 임베딩 모델은 Vectorize 인덱스 차원(1024)과 맞아야 해서 화면에서 바꾸지 않습니다.
+
+### OpenAI · Claude 로 답변하기
+
+답변 모델 목록에 `anthropic/claude-opus-5-5` · `claude-sonnet-5-5` · `claude-haiku-5-5`, `openai/gpt-6.2-sol` · `gpt-6.1-terra` · `gpt-6-luna` 가 있습니다(목록에 없는 모델은 `openai/모델` · `anthropic/모델` 형식으로 직접 입력). 검색(임베딩)과 OCR 은 계속 Workers AI 를 씁니다.
+
+API 키는 **화면에서 입력하지 않고 Worker 비밀 값**으로 넣습니다. 화면·D1 에 키를 두면 관리자 토큰 하나가 새어 나갔을 때 키까지 드러나기 때문입니다. 설정 화면에는 키가 들어 있는지만 보입니다.
+
+```powershell
+# 로컬(npm run dev · dev:mock): .dev.vars 에 추가하고 다시 실행
+#   OPENAI_API_KEY=sk-...
+#   ANTHROPIC_API_KEY=sk-ant-...
+# 배포본: 명령을 실행하고 키를 붙여 넣기 (다시 배포할 필요 없음)
+npx wrangler secret put OPENAI_API_KEY
+npx wrangler secret put ANTHROPIC_API_KEY
+```
+
+- `AI_GATEWAY_ID` 가 있으면 `env.AI.gateway(id).getUrl("openai" | "anthropic")` 주소로 호출해 AI Gateway 대시보드에 로그·비용이 함께 남습니다. 게이트웨이에 인증(Authenticated Gateway)을 켰다면 `CF_AIG_TOKEN` 비밀 값도 넣으세요.
+- 키를 Worker 에 두지 않으려면 AI Gateway 의 **Provider Keys(BYOK)** 에 키를 저장하는 방법도 있습니다(이 프로젝트는 Worker 비밀 값 방식을 기본으로 씁니다).
+- Claude 는 공식 SDK(`@anthropic-ai/sdk`)로 부르고, 생각 모드 설정은 생각 깊이(`effort` 낮음/보통)로 적용합니다. 최신 Claude·GPT 는 온도(temperature)를 받지 않아 온도 설정은 Workers AI 모델에만 쓰입니다. 생각 토큰도 답변 한도에 들어가므로 외부 AI 는 답변 길이 상한을 최소 4096 으로 씁니다.
+- Claude 는 정책상 답을 거절하면 Anthropic 이 정한 다른 모델로 한 번 더 시도합니다(`fallbacks: "default"`).
+- ⚠️ 외부 AI 를 고르면 **질문과 검색된 사내 문서 조각이 OpenAI · Anthropic 서버로 보내지고**, 사용한 만큼 그 회사에 요금이 나갑니다. 사내 보안 규정을 먼저 확인하세요.
+- 연습 모드(`dev:mock`)에서도 키가 있으면 설정 화면의 **[선택한 모델 시험]** 으로 키가 맞는지 확인할 수 있습니다(채팅 답변은 연습 모드에서는 계속 가짜 답).
 
 ## 답변 저장 (Markdown · Word · PDF)
 
@@ -184,7 +209,7 @@ ChatGPT·Claude 대화창처럼 왼쪽에 대화 목록이 있습니다.
 
 ## 모델과 설정값 (`wrangler.jsonc` 의 `vars`)
 
-아래 값은 관리 화면 "설정"의 **기본값**입니다(화면에서 저장한 값이 있으면 그 값이 우선).
+아래 값은 설정 화면의 **기본값**입니다(화면에서 저장한 값이 있으면 그 값이 우선).
 
 | 이름 | 기본값 | 설명 |
 | --- | --- | --- |
@@ -198,10 +223,10 @@ ChatGPT·Claude 대화창처럼 왼쪽에 대화 목록이 있습니다.
 | `MAX_CHUNKS_PER_DOC` | `400` | 문서 하나의 청크 한도 (Vectorize 무료 한도 보호) |
 
 모델은 자주 바뀝니다. 답변이 `5018`(이 계정은 모델 사용 불가), `5028`(지원 종료), `5035`(유료 플랜 필요) 오류로 실패하면
-[모델 목록](https://developers.cloudflare.com/workers-ai/models/)과 [지원 종료 공지](https://developers.cloudflare.com/changelog/product/workers-ai/)를 보고 관리 화면 "설정"에서 답변 모델을 바꾸세요.
+[모델 목록](https://developers.cloudflare.com/workers-ai/models/)과 [지원 종료 공지](https://developers.cloudflare.com/changelog/product/workers-ai/)를 보고 설정 화면에서 답변 모델을 바꾸세요.
 채팅 화면에도 이 안내가 함께 표시됩니다.
 
-검색 개수(topK), 관련도 기준(minScore), 시스템 프롬프트, 청크 크기는 관리 화면 "설정"에서 바꿉니다(기본 규칙 프롬프트는 `src/rag.ts`).
+검색 개수(topK), 관련도 기준(minScore), 시스템 프롬프트, 청크 크기는 설정 화면에서 바꿉니다(기본 규칙 프롬프트는 `src/rag.ts`).
 진짜 모드로 처음 써 볼 때는 관련도 기준(0.35)이 너무 높거나 낮지 않은지, 화면의 근거 "유사도" 값을 보며 맞춰 보세요.
 
 검색은 **하이브리드**입니다. 벡터 검색(뜻이 비슷한 조각)에 더해, 질문 단어가 글자 그대로 들어 있는 조각을 D1 에서 찾아(`instr`) 후보에 넣고, 단어가 들어 있는 비율만큼 점수를 더해 다시 줄을 세웁니다. "SK시그넷"처럼 회사명·모델명·코드만 물으면 큰 표 조각과의 벡터 유사도가 기준(0.35)보다 낮게 나와 근거가 0개가 되고 "등록된 문서에서 찾지 못했습니다"가 나오기 쉬운데, 키워드 쪽이 이것을 잡아 줍니다. `npm run dev` 터미널에 `검색: 문서이름#조각(점수, 키워드)` 로그가 찍히니, 답이 이상하면 어떤 근거가 뽑혔는지 먼저 보세요.

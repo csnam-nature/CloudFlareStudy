@@ -6,6 +6,10 @@ export const esc = (s) =>
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
+/** 관리자 토큰(문서 관리·설정 화면이 같이 씀). 이 브라우저의 localStorage 에만 저장합니다. */
+export const TOKEN_KEY = "docChatbotAdminToken";
+export const auth = () => ({ authorization: `Bearer ${localStorage.getItem(TOKEN_KEY) ?? ""}` });
+
 let toastTimer;
 /** 화면 아래에 잠깐 알림을 띄웁니다. */
 export function toast(msg) {

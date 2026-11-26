@@ -11,6 +11,7 @@
     <h1>🗂️ 문서 관리</h1>
     <span id="mode" class="badge">확인 중…</span>
     <span class="spacer"></span>
+    <a href="/settings.html">⚙️ 설정</a>
     <a href="/">← 채팅으로</a>
   </header>
 
@@ -66,61 +67,6 @@
         </thead>
         <tbody id="rows"><tr><td colspan="6" class="muted">불러오는 중…</td></tr></tbody>
       </table>
-    </section>
-    <section class="card" id="settingsCard">
-      <div class="row">
-        <h2 style="margin: 0">설정</h2>
-        <span class="spacer" style="flex: 1"></span>
-        <span id="settingsState" class="muted"></span>
-      </div>
-      <p class="muted">관리자 토큰을 넣으면 보입니다. 저장하면 다음 질문부터 바로 쓰입니다. 색인 설정(OCR 모델·조각 크기)은 새로 올리거나 "다시 색인"하는 문서부터 적용됩니다.</p>
-      <form id="settingsForm" class="settings" hidden>
-        <fieldset>
-          <legend>화면</legend>
-          <label>화면 제목 <input name="appTitle" type="text" maxlength="40" /></label>
-        </fieldset>
-
-        <fieldset>
-          <legend>답변 AI 모델</legend>
-          <label>답변 모델
-            <select name="chatModelPick"></select>
-          </label>
-          <label id="chatModelCustomWrap" hidden>모델 ID 직접 입력 <input name="chatModelCustom" type="text" placeholder="@cf/회사/모델" /></label>
-          <div class="row">
-            <button type="button" id="testModel">선택한 모델 시험</button>
-            <span id="testResult" class="muted"></span>
-          </div>
-          <label class="check"><input name="thinking" type="checkbox" /> 생각(reasoning) 모드 켜기 <span class="muted">— 지원 모델만. 느려지고 답이 비는 일이 생길 수 있어 보통 끔</span></label>
-          <label>온도(temperature) <input name="temperature" type="number" min="0" max="1.5" step="0.1" /> <span class="muted">0 = 매번 같은 답, 높을수록 다양</span></label>
-          <label>답변 길이 상한(max_tokens) <input name="maxTokens" type="number" min="128" max="4096" step="64" /> <span class="muted">클수록 긴 답 · Neurons 사용 증가</span></label>
-          <label>시스템 프롬프트 <span class="muted">— 비우면 기본 규칙</span>
-            <textarea name="systemPrompt" rows="6" placeholder=""></textarea>
-          </label>
-        </fieldset>
-
-        <fieldset>
-          <legend>검색</legend>
-          <label>근거 조각 수(topK) <input name="topK" type="number" min="1" max="20" step="1" /> <span class="muted">많을수록 놓치는 근거가 줄지만 답이 느려지고 Neurons 증가</span></label>
-          <label>관련도 기준(minScore) <input name="minScore" type="number" min="0" max="0.9" step="0.01" /> <span class="muted">진짜 모드 벡터 유사도 기준. 질문 단어가 들어 있는 조각은 기준과 상관없이 후보</span></label>
-        </fieldset>
-
-        <fieldset>
-          <legend>색인</legend>
-          <label>이미지 OCR 모델
-            <select name="ocrModelPick"></select>
-          </label>
-          <label id="ocrModelCustomWrap" hidden>모델 ID 직접 입력 <input name="ocrModelCustom" type="text" placeholder="@cf/회사/모델 (이미지 입력 가능한 모델)" /></label>
-          <label>조각 크기(글자) <input name="chunkSize" type="number" min="300" max="3000" step="50" /></label>
-          <label>조각 겹침(글자) <input name="chunkOverlap" type="number" min="0" max="500" step="10" /> <span class="muted">조각 크기의 절반보다 작게</span></label>
-          <label>문서당 조각 수 한도 <input name="maxChunksPerDoc" type="number" min="10" max="5000" step="10" /></label>
-          <p class="muted">임베딩 모델: <code id="embedModel"></code> (Vectorize 인덱스 차원과 맞아야 해서 화면에서는 바꾸지 않습니다)</p>
-        </fieldset>
-
-        <div class="row">
-          <button class="primary" type="submit">설정 저장</button>
-          <button type="button" id="resetSettings">모두 기본값으로</button>
-        </div>
-      </form>
     </section>
   </main>
   <div id="toast" class="toast"></div>
