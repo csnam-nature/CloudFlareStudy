@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>문서 관리 · 사내 문서 챗봇</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="top">
+    <h1>🗂️ 문서 관리</h1>
+    <span id="mode" class="badge">확인 중…</span>
+    <span class="spacer"></span>
+    <a href="/">← 채팅으로</a>
+  </header>
+
+  <main class="admin">
+    <section class="card">
+      <h2>관리자 토큰</h2>
+      <form id="tokenForm" class="row">
+        <input id="token" type="password" placeholder="ADMIN_TOKEN" autocomplete="off" style="min-width: 260px" />
+        <button class="primary" type="submit">저장</button>
+        <button id="clearToken" type="button">지우기</button>
+        <span id="tokenState" class="muted"></span>
+      </form>
+      <p class="muted">업로드·이름 수정·다시 색인·삭제에 필요합니다. 이 브라우저에만 저장됩니다.</p>
+    </section>
+
+    <section class="card">
+      <h2>문서 올리기</h2>
+      <label id="drop" class="drop">
+        <input id="file" type="file" multiple accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md" hidden />
+        여기에 파일을 끌어다 놓거나 눌러서 고르세요<br />
+        <span class="muted">PDF · DOCX · 엑셀(XLSX·XLS) · CSV · TXT · MD, 파일당 최대 <span id="maxMb">10</span>MB · 올린 뒤 몇 초~몇 분 안에 색인됩니다</span>
+      </label>
+      <div id="uploadLog" class="muted" style="margin-top: 8px"></div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2 style="margin: 0">문서 목록</h2>
+        <span class="spacer" style="flex: 1"></span>
+        <span id="summary" class="muted"></span>
+        <button id="refresh" type="button">새로고침</button>
+        <button id="deleteAll" type="button" class="danger">모두 삭제</button>
+      </div>
+      <div class="meter" title="Vectorize 무료 저장 한도(500만 차원 ÷ 1024차원 ≈ 4,882개 청크) 대비 사용량"><div id="meterBar" style="width: 0"></div></div>
+      <table class="docs" style="margin-top: 10px">
+        <colgroup>
+          <col />
+          <col style="width: 80px" class="hide-sm" />
+          <col style="width: 60px" />
+          <col style="width: 84px" />
+          <col style="width: 110px" class="hide-sm" />
+          <col style="width: 300px" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>이름</th>
+            <th class="hide-sm">크기</th>
+            <th>청크</th>
+            <th>상태</th>
+            <th class="hide-sm">올린 시각</th>
+            <th>관리</th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="6" class="muted">불러오는 중…</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script src="/admin.js" type="module"></script>
+</body>
+</html>

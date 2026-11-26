@@ -1,0 +1,27 @@
+{
+  "name": "ai-doc-chatbot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Workers AI + Vectorize + Queues + Agents SDK + AI Gateway 로 만드는 사내 문서 AI 챗봇 (학습용 미니 프로젝트 3)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:mock": "wrangler dev --env mock",
+    "db:migrate:local": "wrangler d1 migrations apply doc-chatbot-db --local",
+    "db:migrate:mock": "wrangler d1 migrations apply doc-chatbot-db --local --env mock",
+    "db:migrate:remote": "wrangler d1 migrations apply doc-chatbot-db --remote",
+    "postinstall": "wrangler types",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/smoke-test.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "agents": "^0.34.0",
+    "hono": "^4.13.22"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "wrangler": "^4.168.0"
+  }
+}
