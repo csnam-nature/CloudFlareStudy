@@ -110,7 +110,8 @@ documents.post("/", requireAdmin, async (c) => {
   const key = `docs/${id}.${ext}`;
 
   // 2) 원본을 R2 에 저장
-  await c.env.FILES.put(key, file.stream(), { httpMetadata: { contentType } });
+  // 스트림 대신 바이트로 넣습니다. 최대 10MB 라 메모리 부담이 작고, 길이를 아는 상태로 저장되어 잘릴 걱정이 없습니다.
+  await c.env.FILES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType } });
   await c.env.DB.prepare("UPDATE documents SET r2_key = ? WHERE id = ?").bind(key, id).run();
 
   // 3) 색인은 큐에 맡기고 바로 응답합니다. (업로드 응답이 무거운 AI 작업을 기다리지 않음)

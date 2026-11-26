@@ -12,23 +12,36 @@ import { unzipSync, strFromU8 } from "fflate";
 /** 압축을 풀었을 때 크기 한도. 작은 ZIP 이 엄청나게 부풀어 오르는 "압축 폭탄"을 막습니다. */
 const MAX_UNZIPPED_BYTES = 50 * 1024 * 1024;
 
-export function hwpxToMarkdown(bytes: ArrayBuffer): string {
-  let total = 0;
+/** 본문을 읽는 데 필요한 파일만 풉니다(그림 등은 건너뜀). */
+const wanted = (name: string) =>
+  /^Contents\/(content\.hpf|section\d+\.xml)$/i.test(name) || /^(META-INF\/manifest\.xml|Preview\/PrvText\.txt)$/i.test(name);
+
+export async function hwpxToMarkdown(bytes: ArrayBuffer): Promise<string> {
+  const u8 = new Uint8Array(bytes);
+  // 파일 앞 4바이트(매직 넘버)로 진짜 형식을 먼저 확인합니다.
+  //   50 4B 03 04 = "PK" ZIP(HWPX)   D0 CF 11 E0 = OLE 복합 문서(예전 HWP·DOC·XLS)
+  const magic = Array.from(u8.subarray(0, 4), (b) => b.toString(16).padStart(2, "0")).join(" ");
+  if (magic === "d0 cf 11 e0")
+    throw new Error("확장자는 .hwpx 지만 실제로는 예전 형식(HWP) 파일입니다. 한글에서 열어 [다른 이름으로 저장] → 파일 형식 'HWPX' 로 저장해 올려 주세요.");
+  if (!magic.startsWith("50 4b"))
+    throw new Error(`HWPX 파일이 아닙니다(ZIP 형식이 아님, 파일 앞부분 ${magic || "비어 있음"}). 한글에서 'HWPX' 형식으로 다시 저장해 올려 주세요.`);
+
   let files: Record<string, Uint8Array>;
   try {
-    files = unzipSync(new Uint8Array(bytes), {
-      // 필요한 파일만 풉니다(그림 등은 건너뜀).
-      filter: (f) => {
-        const want = /^Contents\/(content\.hpf|section\d+\.xml)$/i.test(f.name) || /^(META-INF\/manifest\.xml|Preview\/PrvText\.txt)$/i.test(f.name);
-        if (want) total += f.originalSize;
-        if (total > MAX_UNZIPPED_BYTES) throw new Error("HWPX 압축을 풀면 너무 큽니다(50MB 초과).");
-        return want;
-      },
-    });
+    files = unzipFast(u8);
+    // 위치 정보가 어긋난 ZIP 은 fflate 가 오류 없이 빈 목록을 줄 때가 있어, 본문이 없으면 예비 읽기로 다시 확인합니다.
+    if (!Object.keys(files).some((n) => /^Contents\/section\d+\.xml$/i.test(n))) throw new Error("본문 파일을 찾지 못함");
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("50MB")) throw e;
-    throw new Error("HWPX 파일을 열 수 없습니다(ZIP 형식이 아님). 확장자만 바꾼 .hwp 파일이면 한글에서 'HWPX 로 저장'해 올려 주세요.");
+    if (e instanceof TooBigError) throw e;
+    // fflate 가 못 여는 ZIP(일부 프로그램이 만든 특이한 구조)은 Workers 내장 압축 해제로 한 번 더 시도합니다.
+    try {
+      files = await unzipFallback(u8);
+    } catch (e2) {
+      if (e2 instanceof TooBigError) throw e2;
+      const why = (x: unknown) => (x instanceof Error ? x.message : String(x));
+      console.error("HWPX 압축 풀기 실패", why(e), "/", why(e2));
+      throw new Error(`HWPX 압축을 풀지 못했습니다(${why(e)}). 한글에서 열어 'HWPX' 로 다시 저장한 뒤 올려 주세요.`);
+    }
   }
 
   // 암호를 건 문서·배포용 문서는 본문이 암호화되어 있어 읽을 수 없습니다.
@@ -46,6 +59,120 @@ export function hwpxToMarkdown(bytes: ArrayBuffer): string {
   // 본문에서 글자를 못 찾으면 한글이 만들어 두는 미리보기 글(앞부분만)이라도 씁니다.
   const preview = files["Preview/PrvText.txt"];
   return preview ? strFromU8(preview).trim() : "";
+}
+
+class TooBigError extends Error {
+  constructor() {
+    super(`HWPX 압축을 풀면 너무 큽니다(${MAX_UNZIPPED_BYTES / 1024 / 1024}MB 초과).`);
+  }
+}
+
+/** fflate 로 풀기(빠름) */
+function unzipFast(u8: Uint8Array): Record<string, Uint8Array> {
+  let total = 0;
+  return unzipSync(u8, {
+    filter: (f) => {
+      if (!wanted(f.name)) return false;
+      total += f.originalSize;
+      if (total > MAX_UNZIPPED_BYTES) throw new TooBigError();
+      return true;
+    },
+  });
+}
+
+/**
+ * 예비 ZIP 읽기: ZIP 끝의 "중앙 디렉터리"에서 파일 목록을 읽고, 압축(deflate)은 Workers 내장 DecompressionStream 으로 풉니다.
+ * ZIP64(4GB 넘는 크기 표기)와 앞에 다른 데이터가 붙은 ZIP 도 처리합니다.
+ */
+async function unzipFallback(u8: Uint8Array): Promise<Record<string, Uint8Array>> {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const u16 = (o: number) => dv.getUint16(o, true);
+  const u32 = (o: number) => dv.getUint32(o, true);
+  const u64 = (o: number) => u32(o) + u32(o + 4) * 2 ** 32;
+
+  // 1) 끝에서부터 EOCD(PK\x05\x06) 찾기 (뒤에 주석이 최대 65535바이트 붙을 수 있음)
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 22 - 65535); i--)
+    if (u32(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  if (eocd < 0) throw new Error("ZIP 끝 표시(EOCD)가 없습니다. 파일이 잘렸을 수 있습니다");
+  let count = u16(eocd + 10);
+  let cdSize = u32(eocd + 12);
+  let cdOff = u32(eocd + 16);
+  if (eocd >= 20 && u32(eocd - 20) === 0x07064b50) {
+    const z64 = u64(eocd - 20 + 8);
+    if (u32(z64) === 0x06064b50) (count = u64(z64 + 32)), (cdSize = u64(z64 + 40)), (cdOff = u64(z64 + 48));
+  }
+  // 앞에 다른 데이터가 붙어 있으면 기록된 위치가 밀려 있으므로 실제 위치에 맞춥니다.
+  const shift = eocd - cdSize - cdOff > 0 && u32(eocd - cdSize) === 0x02014b50 ? eocd - cdSize - cdOff : 0;
+
+  const out: Record<string, Uint8Array> = {};
+  let total = 0;
+  let p = cdOff + shift;
+  for (let n = 0; n < count && u32(p) === 0x02014b50; n++) {
+    const flags = u16(p + 8);
+    const method = u16(p + 10);
+    let csize = u32(p + 20);
+    let usize = u32(p + 24);
+    const nameLen = u16(p + 28);
+    const extraLen = u16(p + 30);
+    const commentLen = u16(p + 32);
+    let local = u32(p + 42);
+    const name = new TextDecoder(flags & 0x800 ? "utf-8" : "latin1").decode(u8.subarray(p + 46, p + 46 + nameLen));
+    // ZIP64 추가 필드(0x0001): 0xFFFFFFFF 로 표시된 값만 차례로 들어 있음
+    for (let e = p + 46 + nameLen; e < p + 46 + nameLen + extraLen; ) {
+      const id = u16(e);
+      const len = u16(e + 2);
+      if (id === 1) {
+        let q = e + 4;
+        if (usize === 0xffffffff) (usize = u64(q)), (q += 8);
+        if (csize === 0xffffffff) (csize = u64(q)), (q += 8);
+        if (local === 0xffffffff) local = u64(q);
+      }
+      e += 4 + len;
+    }
+    p += 46 + nameLen + extraLen + commentLen;
+    if (!wanted(name)) continue;
+    if (flags & 1) throw new Error("ZIP 자체에 암호가 걸려 있습니다");
+    // ZIP 에 적힌 크기(usize)로 먼저 거르고, 실제로 푼 양도 다시 셉니다(적힌 크기는 거짓일 수 있음).
+    if (total + usize > MAX_UNZIPPED_BYTES) throw new TooBigError();
+
+    const lh = local + shift;
+    if (u32(lh) !== 0x04034b50) throw new Error(`${name} 의 위치 정보가 맞지 않습니다`);
+    const start = lh + 30 + u16(lh + 26) + u16(lh + 28);
+    const data = u8.subarray(start, start + csize);
+    if (method === 0) out[name] = data.slice();
+    else if (method === 8) out[name] = await inflateRaw(data, MAX_UNZIPPED_BYTES - total);
+    else throw new Error(`${name} 의 압축 방식(${method})을 지원하지 않습니다`);
+    total += out[name].byteLength;
+    if (total > MAX_UNZIPPED_BYTES) throw new TooBigError();
+  }
+  return out;
+}
+
+/**
+ * deflate 압축을 풉니다. ZIP 에 적힌 크기는 믿지 않고, 실제로 풀려 나온 양을 세다가 limit 를 넘으면 바로 멈춥니다(압축 폭탄 방지).
+ */
+async function inflateRaw(data: Uint8Array, limit: number): Promise<Uint8Array> {
+  const reader = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      throw new TooBigError();
+    }
+    parts.push(value);
+  }
+  const out = new Uint8Array(size);
+  let o = 0;
+  for (const p of parts) out.set(p, o), (o += p.byteLength);
+  return out;
 }
 
 /** 본문 파일 순서: content.hpf 의 spine 순서를 따르고, 없으면 section 번호 순으로. */

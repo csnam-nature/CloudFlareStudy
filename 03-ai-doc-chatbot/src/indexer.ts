@@ -45,6 +45,9 @@ async function indexDocument(env: Bindings, docId: number): Promise<number> {
   const obj = await env.FILES.get(doc.r2_key);
   if (!obj) throw new PermanentError("R2 에 원본 파일이 없습니다.");
   const bytes = await obj.arrayBuffer();
+  // 올릴 때 기록한 크기와 R2 에서 읽은 크기가 다르면 저장 중에 잘린 것이므로 다시 올려야 합니다.
+  if (doc.size && bytes.byteLength !== doc.size)
+    throw new PermanentError(`R2 에 저장된 원본 크기(${bytes.byteLength}바이트)가 올린 파일 크기(${doc.size}바이트)와 다릅니다. 파일을 삭제하고 다시 올려 주세요.`);
 
   // 2) 텍스트 추출
   let text: string;
