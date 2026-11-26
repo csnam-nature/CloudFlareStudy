@@ -126,22 +126,30 @@ const csvIndexed = await waitIndexed(csvDoc.id);
 check("CSV 색인 완료, 큰 표는 여러 청크", csvIndexed?.status === "ready" && csvIndexed.chunkCount > 1, `청크 ${csvIndexed?.chunkCount}개`);
 
 // 3-2. 한글 HWPX: ZIP 안의 section XML 에서 문단·표를 직접 읽음(AI 불필요) / 예전 HWP 는 400
+// 공문서에 흔한 모양으로 만듭니다: 칸 하나짜리 제목 상자 + 두 줄로 병합된 머리글 + 세로 병합된 제조사 칸 + 맨 아래 ※ 비고 행
 const hp = (t) => `<hp:p><hp:run><hp:t>${t}</hp:t></hp:run></hp:p>`;
-const htc = (t) => `<hp:tc><hp:subList>${hp(t)}</hp:subList><hp:cellSpan colSpan="1" rowSpan="1"/></hp:tc>`;
+const htc = (t, r, c, rs = 1, cs = 1) =>
+  `<hp:tc><hp:subList>${hp(t)}</hp:subList><hp:cellAddr colAddr="${c}" rowAddr="${r}"/><hp:cellSpan colSpan="${cs}" rowSpan="${rs}"/></hp:tc>`;
+const htbl = (rows) => `<hp:p><hp:run><hp:tbl>${rows.map((r) => `<hp:tr>${r}</hp:tr>`).join("")}</hp:tbl></hp:run></hp:p>`;
+const hrows = [htc("연번", 0, 0, 2) + htc("제조사", 0, 1, 2) + htc("충전기", 0, 2, 1, 2), htc("모델명", 1, 2) + htc("용량(kW)", 1, 3)];
+let hr = 2;
+for (const m of ["대영채비", "이브이시스", "중앙제어", "SK시그넷", "에바", "피엔이시스템즈", "클린일렉스", "티비유", "와이어블", "차지비"])
+  for (let i = 0; i < 4; i++, hr++) hrows.push((i ? "" : htc(m, hr, 1, 4)) + htc(String(hr - 1), hr, 0) + htc(`M${hr}-${i}`, hr, 2) + htc(String(50 * (i + 1)), hr, 3));
+hrows.push(htc("※ 선정 목록은 고시에 따라 바뀔 수 있음 &amp; 확인 필요", hr, 0, 1, 4));
 const hwpx = zipSync({
   mimetype: strToU8("application/hwp+zip"),
   "Contents/content.hpf": strToU8('<opf:package><opf:manifest><opf:item id="s0" href="Contents/section0.xml"/></opf:manifest><opf:spine><opf:itemref idref="s0"/></opf:spine></opf:package>'),
   "Contents/section0.xml": strToU8(
-    `<?xml version="1.0" encoding="UTF-8"?><hs:sec xmlns:hs="s" xmlns:hp="p">${hp("냉각 장치 점검 안내")}` +
-      `<hp:p><hp:run><hp:tbl><hp:tr>${htc("코드")}${htc("조치")}</hp:tr><hp:tr>${htc("H-07")}${htc("냉각팬 분해 청소 &amp; 필터 교체")}</hp:tr></hp:tbl></hp:run></hp:p></hs:sec>`,
+    `<?xml version="1.0" encoding="UTF-8"?><hs:sec xmlns:hs="s" xmlns:hp="p">${htbl([htc("「2026년 충전시설 보조사업」 충전기 모델 선정 목록", 0, 0)])}${htbl(hrows)}</hs:sec>`,
   ),
 });
-up = await upload(Buffer.from(hwpx), "냉각 점검.hwpx");
+up = await upload(Buffer.from(hwpx), "충전기 모델 선정 목록.hwpx");
 const hwpxDoc = up.data;
 const hwpxIndexed = await waitIndexed(hwpxDoc.id);
 check("HWPX 색인 완료", hwpxIndexed?.status === "ready", hwpxIndexed?.error);
-const ah = await ask(`smoke-hwpx-${Date.now()}`, "H-07 조치는?", hwpxDoc.id);
-check("HWPX 표 내용이 근거로 검색됨", ah.sources?.[0]?.text.includes("| H-07 | 냉각팬 분해 청소 & 필터 교체 |"), ah.sources?.[0]?.text);
+const ah = await ask(`smoke-hwpx-${Date.now()}`, "SK시그넷 모델은?");
+check("HWPX 병합 머리글이 열마다 합쳐짐", ah.sources?.some((s) => s.text.includes("| 연번 | 제조사 | 충전기 모델명 | 충전기 용량(kW) |")), ah.sources?.[0]?.text.slice(0, 120));
+check("HWPX 질문 → 제목 상자가 아니라 SK시그넷 행이 답으로", (ah.answer.match(/\| SK시그넷 \|/g) ?? []).length === 4 && !ah.answer.includes("선정 목록 |"), ah.answer);
 // 연습 모드의 가짜 검색은 엉성해서, 남겨 두면 아래 E-21 질문의 근거 순위를 흔듭니다. 확인했으니 바로 지웁니다.
 await fetch(`${BASE}/api/documents/${hwpxDoc.id}`, { method: "DELETE", headers: auth });
 up = await upload(Buffer.from("HWP Document File"), "옛날 문서.hwp");

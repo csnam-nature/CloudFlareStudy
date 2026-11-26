@@ -77,7 +77,9 @@ function sectionOrder(files: Record<string, Uint8Array>): string[] {
 
 const attr = (attrs: string, name: string) => attrs.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1];
 
-type Table = { rows: string[][]; row: string[] | null; cell: string[] | null };
+/** 표의 칸 하나. r·c 는 위치(cellAddr), rs·cs 는 병합 크기(cellSpan). */
+type Cell = { text: string; r?: number; c?: number; rs: number; cs: number; row: number };
+type Table = { cells: Cell[]; rowIdx: number; cell: string[] | null; meta: { r?: number; c?: number; rs: number; cs: number } };
 
 /**
  * section XML 하나 → Markdown.
@@ -98,7 +100,7 @@ export function sectionToMarkdown(xml: string): string {
   };
 
   for (const m of xml.matchAll(/<(\/?)([\w.-]+:)?([\w.-]+)((?:\s[^>]*?)?)(\/?)>|([^<]+)/g)) {
-    const [, close, , local, , selfClose, text] = m;
+    const [, close, , local, attrs, selfClose, text] = m;
     if (text !== undefined) {
       if (inText > 0 && paras.length) paras[paras.length - 1] += decodeEntities(text);
       continue;
@@ -128,27 +130,45 @@ export function sectionToMarkdown(xml: string): string {
             emit(paras[paras.length - 1]);
             paras[paras.length - 1] = "";
           }
-          tables.push({ rows: [], row: null, cell: null });
+          tables.push({ cells: [], rowIdx: -1, cell: null, meta: { rs: 1, cs: 1 } });
         }
         if (closing) {
           const t = tables.pop();
           if (!t) break;
+          const grid = toGrid(t.cells);
           const outer = tables.at(-1)?.cell;
           // 표 안의 표는 바깥 칸 안에 "a / b; c / d" 처럼 한 줄로 풀어 넣습니다.
-          if (outer) outer.push(t.rows.map((r) => r.filter((c) => c.trim()).join(" / ")).filter(Boolean).join("; "));
-          else if (t.rows.length) blocks.push(renderTable(t.rows));
+          if (outer) outer.push(grid.map((r) => dedupe(r).join(" / ")).filter(Boolean).join("; "));
+          else {
+            const md = renderTable(grid);
+            if (md) blocks.push(md);
+          }
         }
         break;
       case "tr": {
         const t = tables.at(-1);
-        if (t && opening) t.row = [];
-        if (t && closing && t.row) t.rows.push(t.row), (t.row = null);
+        if (t && opening) t.rowIdx++;
         break;
       }
       case "tc": {
         const t = tables.at(-1);
-        if (t && opening) t.cell = [];
-        if (t && closing && t.cell) (t.row ??= []).push(t.cell.join(" ")), (t.cell = null);
+        if (t && opening) (t.cell = []), (t.meta = { rs: 1, cs: 1 });
+        if (t && closing && t.cell) {
+          t.cells.push({ text: t.cell.join(" ").trim(), ...t.meta, row: Math.max(0, t.rowIdx) });
+          t.cell = null;
+        }
+        break;
+      }
+      // 칸의 위치와 병합 크기. 칸 내용(subList) 뒤에 나오므로 칸이 닫힐 때 씁니다.
+      // (표 안의 표가 있어도, 안쪽 표의 칸은 이미 닫혔으므로 가장 안쪽 열린 표가 이 칸의 표입니다.)
+      case "cellAddr": {
+        const t = tables.at(-1);
+        if (t?.cell) (t.meta.c = num(attrs, "colAddr")), (t.meta.r = num(attrs, "rowAddr"));
+        break;
+      }
+      case "cellSpan": {
+        const t = tables.at(-1);
+        if (t?.cell) (t.meta.cs = num(attrs, "colSpan") ?? 1), (t.meta.rs = num(attrs, "rowSpan") ?? 1);
         break;
       }
     }
@@ -156,14 +176,86 @@ export function sectionToMarkdown(xml: string): string {
   return blocks.join("\n\n");
 }
 
-/** 행 목록 → Markdown 표. 첫 행을 머리글로 씁니다(chunk.ts 가 큰 표를 나눌 때 머리글을 조각마다 다시 붙임). */
-function renderTable(rows: string[][]): string {
-  const data = rows.filter((r) => r.some((c) => c.trim()));
-  if (data.length === 0) return "";
-  const cols = Math.max(...data.map((r) => r.length));
-  const cell = (s: string | undefined) => (s ?? "").replace(/\|/g, "\\|").trim();
-  const line = (r: string[]) => `| ${Array.from({ length: cols }, (_, i) => cell(r[i])).join(" | ")} |`;
-  return [line(data[0]), `|${" --- |".repeat(cols)}`, ...data.slice(1).map(line)].join("\n");
+const num = (attrs: string, name: string) => {
+  const v = Number(attr(attrs, name));
+  return Number.isFinite(v) && attr(attrs, name) !== undefined ? v : undefined;
+};
+
+/** 같은 병합 칸이 이어서 반복된 것은 한 번만 */
+const dedupe = (r: (Cell | null)[]) => r.filter((c, i) => c && c.text && c !== r[i - 1]).map((c) => c!.text);
+
+/**
+ * 칸 목록 → 2차원 격자. 병합된 칸은 덮는 자리마다 같은 칸을 가리킵니다.
+ * 위치(cellAddr)가 있으면 그대로 쓰고, 없으면 HTML 표처럼 "다음 빈 자리"에 차례로 채웁니다.
+ */
+function toGrid(cells: Cell[]): (Cell | null)[][] {
+  const grid: (Cell | null)[][] = [];
+  const at = (r: number) => (grid[r] ??= []);
+  const hasAddr = cells.length > 0 && cells.every((c) => c.r !== undefined && c.c !== undefined);
+  let lastRow = -1;
+  let col = 0;
+  for (const cell of cells) {
+    let r: number, c: number;
+    if (hasAddr) (r = cell.r!), (c = cell.c!);
+    else {
+      if (cell.row !== lastRow) (lastRow = cell.row), (col = 0);
+      r = cell.row;
+      while (at(r)[col]) col++;
+      c = col;
+    }
+    const rs = Math.max(1, Math.min(cell.rs, 500));
+    const cs = Math.max(1, Math.min(cell.cs, 100));
+    for (let i = 0; i < rs; i++) for (let j = 0; j < cs; j++) at(r + i)[c + j] = cell;
+    col = c + cs;
+  }
+  const cols = Math.max(0, ...grid.map((r) => (r ? r.length : 0)));
+  return Array.from(grid, (r) => Array.from({ length: cols }, (_, i) => r?.[i] ?? null));
+}
+
+/**
+ * 격자 → Markdown. 공문서 표에 흔한 모양을 정리합니다.
+ *  - 칸 하나짜리 표(제목 상자)나 한 줄·한 열짜리 표 → 표가 아니라 그냥 글로
+ *  - 맨 위·맨 아래의 "가로 전체를 합친 행"(표 제목, ※ 비고) → 표 앞뒤의 글로
+ *  - 머리글이 두 줄 이상으로 병합돼 있으면(예: "충전기 | 충전기" 아래 "모델명 | 용량") 열마다 합쳐 한 줄로
+ *  - 세로로 병합된 칸(같은 제조사 여러 모델 등)은 행마다 다시 적어, 행 하나만 잘려 나와도 뜻이 통하게
+ */
+function renderTable(grid: (Cell | null)[][]): string {
+  const rows = grid.filter((r) => r.some((c) => c?.text));
+  const cols = rows[0]?.length ?? 0;
+  if (!rows.length) return "";
+  const fullWidth = (r: (Cell | null)[]) => r.every((c) => c === r[0]);
+  const lines = (rs: (Cell | null)[][]) => rs.map((r) => dedupe(r).join(" / ")).filter(Boolean);
+
+  if (cols <= 1 || rows.length <= 1) return lines(rows).join("\n");
+
+  const before: string[] = [];
+  const after: string[] = [];
+  while (rows.length && fullWidth(rows[0])) before.push(...lines([rows.shift()!]));
+  while (rows.length && fullWidth(rows[rows.length - 1])) after.unshift(...lines([rows.pop()!]));
+  if (rows.length <= 1) return [...before, ...lines(rows), ...after].join("\n\n");
+
+  // 머리글 줄 수: 첫 행 칸들이 세로로 병합돼 내려온 만큼(최대 3줄). 가로 병합만 있으면 다음 줄까지.
+  let headRows = 1;
+  for (const c of new Set(rows[0])) if (c) headRows = Math.max(headRows, c.rs);
+  if (headRows === 1 && rows[0].some((c, i) => c && c === rows[0][i + 1])) headRows = 2;
+  headRows = Math.min(headRows, 3, rows.length - 1);
+
+  const header = Array.from({ length: cols }, (_, i) => {
+    const parts: string[] = [];
+    for (let r = 0; r < headRows; r++) {
+      const t = rows[r][i]?.text ?? "";
+      if (t && !parts.includes(t)) parts.push(t);
+    }
+    return parts.join(" ");
+  });
+  const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+  const line = (r: string[]) => `| ${r.map(cell).join(" | ")} |`;
+  const body = rows.slice(headRows).map((r) =>
+    // 가로 병합의 이어진 자리는 비우고(같은 글이 옆으로 반복되지 않게), 세로 병합은 그대로 반복
+    r.map((c, i) => (c && (i === 0 || r[i - 1] !== c) ? c.text : "")),
+  );
+  const table = [line(header), `|${" --- |".repeat(cols)}`, ...body.map(line)].join("\n");
+  return [...before, table, ...after].join("\n\n");
 }
 
 function decodeEntities(s: string): string {
