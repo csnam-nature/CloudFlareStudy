@@ -8,6 +8,7 @@ import { embed, extractText, upsertVectors } from "./ai";
 import { type Bindings, type IndexJob, nowSec } from "./auth";
 import { chunkText } from "./chunk";
 import { getDoc, removeChunks } from "./documents";
+import { getSettings } from "./settings";
 
 const MAX_ATTEMPTS = 3; // max_retries(2) + 처음 1번
 
@@ -41,6 +42,9 @@ async function indexDocument(env: Bindings, docId: number): Promise<number> {
   if (!doc) return 0; // 색인 전에 삭제된 문서
   await setStatus(env, docId, "indexing", null);
 
+  // 관리 화면 설정(OCR 모델, 청크 크기·겹침, 조각 수 한도)
+  const settings = await getSettings(env);
+
   // 1) 원본 읽기
   const obj = await env.FILES.get(doc.r2_key);
   if (!obj) throw new PermanentError("R2 에 원본 파일이 없습니다.");
@@ -52,15 +56,15 @@ async function indexDocument(env: Bindings, docId: number): Promise<number> {
   // 2) 텍스트 추출
   let text: string;
   try {
-    text = await extractText(env, doc.filename, bytes, doc.content_type);
+    text = await extractText(env, doc.filename, bytes, doc.content_type, settings.ocrModel);
   } catch (e) {
     throw new PermanentError(e instanceof Error ? e.message : String(e));
   }
   if (!text.trim()) throw new PermanentError("문서에서 텍스트를 찾지 못했습니다. (스캔 이미지 PDF 는 지원하지 않습니다. 페이지를 JPG·PNG 로 저장해 올리면 OCR 로 읽습니다)");
 
   // 3) 청크 분할
-  const chunks = chunkText(text);
-  const max = Number(env.MAX_CHUNKS_PER_DOC) || 400;
+  const chunks = chunkText(text, { size: settings.chunkSize, overlap: settings.chunkOverlap });
+  const max = settings.maxChunksPerDoc;
   if (chunks.length > max)
     throw new PermanentError(`청크가 ${chunks.length}개로 한도(${max}개)를 넘습니다. 문서를 나눠 올리거나 MAX_CHUNKS_PER_DOC 를 늘리세요.`);
 

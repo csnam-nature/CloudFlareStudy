@@ -1,6 +1,6 @@
-# 03. 사내 문서 AI 챗봇 (Workers AI + Vectorize + Queues + Agents SDK + AI Gateway)
+# 03. 네이처텍 문서 챗봇 (Workers AI + Vectorize + Queues + Agents SDK + AI Gateway)
 
-관리자가 PDF·Word·텍스트 문서(예: 충전기 프로토콜 문서, 오류 코드 표)를 올리면,
+관리자가 PDF·Word·한글(HWPX)·엑셀·이미지 문서(예: 충전기 프로토콜 문서, 오류 코드 표)를 올리면,
 누구나 채팅으로 질문하고 **"근거 문서와 함께"** 답을 받는 RAG(검색 증강 생성) 챗봇입니다.
 목표는 두 가지입니다.
 
@@ -16,10 +16,12 @@
 03-ai-doc-chatbot/
 ├── wrangler.jsonc            # Worker 설정 + 모든 바인딩, 연습 모드(env.mock)
 ├── migrations/
-│   └── 0001_init.sql         # documents, chunks, mock_vectors 테이블
+│   ├── 0001_init.sql         # documents, chunks, mock_vectors 테이블
+│   └── 0002_settings.sql     # 관리 화면 설정 값
 ├── public/                   # 정적 화면 (빌드 없음)
 │   ├── index.html · app.js   # 채팅 화면 (순수 WebSocket)
-│   ├── admin.html · admin.js # 문서 관리 화면 (업로드·목록·열기·이름 수정·다시 색인·삭제)
+│   ├── admin.html · admin.js # 문서 관리 화면 (업로드·목록·열기·이름 수정·다시 색인·삭제·설정)
+│   ├── export.js             # 답변 저장: Markdown · Word(.docx) · PDF(인쇄)
 │   ├── common.js · style.css
 ├── src/
 │   ├── index.ts              # 진입점: fetch(화면·API·에이전트 라우팅) + queue(색인)
@@ -29,6 +31,8 @@
 │   ├── rag.ts                # 검색 + 프롬프트 만들기
 │   ├── agent.ts              # ChatAgent (Agents SDK): 대화 기록, 답변 스트리밍, Rate Limiting
 │   ├── ai.ts                 # Workers AI · AI Gateway · Vectorize 호출, 연습 모드 가짜 구현
+│   ├── settings.ts           # 관리 화면 설정(모델·검색·청크) 저장·API
+│   ├── hwpx.ts               # 한글 HWPX → Markdown
 │   └── auth.ts               # 관리자 토큰, 공용 타입
 ├── samples/charger-error-codes.md  # 시험용 가상 오류 코드 문서
 ├── scripts/smoke-test.mjs    # 업로드 → 색인 → 질문 → 수정 → 삭제 자동 확인
@@ -64,7 +68,9 @@
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| GET | `/api/me` | 관리자 여부, 연습 모드 여부, 모델 이름 |
+| GET | `/api/me` | 관리자 여부, 연습 모드 여부, 화면 제목, 모델 이름 |
+| GET · PUT · DELETE | `/api/settings` | 설정 읽기 · 일부 바꾸기 · 모두 기본값으로 (관리자) |
+| POST | `/api/settings/test` | 모델 시험. 본문 `{ "model": "@cf/..." }` (관리자) |
 | GET | `/api/documents` | 문서 목록 + 전체 청크 수 |
 | POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`). PDF·DOCX·HWPX·XLSX·XLSM·XLS·CSV·TXT·MD 10MB, JPG·PNG·WebP 4MB 까지 (관리자) |
 | GET | `/api/documents/:id/file` | 원본 열기, `?download=1` 이면 내려받기 |
@@ -129,13 +135,38 @@ npm run dev                              # AI·Vectorize 는 원격(실제 계�
 
 ```powershell
 npx wrangler secret put ADMIN_TOKEN      # 배포용 관리자 토큰
-npm run db:migrate:remote
+npm run db:migrate:remote                # 새 마이그레이션(예: 0002_settings)이 생기면 배포 전에 꼭 다시 실행
 npm run deploy                           # https://doc-chatbot.<계정>.workers.dev
 ```
 
 번들 크기는 약 2.4MB(gzip 460KB)로 무료 플랜 Worker 크기 한도(압축 3MB) 안입니다.
 
+## 관리 화면의 "설정"
+
+문서 관리 화면 맨 아래 **설정** 섹션(관리자 토큰 필요)에서 다시 배포하지 않고 바꿀 수 있습니다. 값은 D1 `settings` 표에 저장되고, 저장하지 않은 항목은 아래 `vars` 가 기본값입니다.
+
+| 묶음 | 항목 |
+| --- | --- |
+| 화면 | 화면 제목 (기본 "네이처텍 문서 챗봇") |
+| 답변 AI 모델 | 답변 모델(목록에서 고르기 또는 직접 입력) · **[선택한 모델 시험]** 버튼 · 생각(reasoning) 모드 · 온도 · 답변 길이 상한 · 시스템 프롬프트 |
+| 검색 | 근거 조각 수(topK) · 관련도 기준(minScore) |
+| 색인 | 이미지 OCR 모델 · 조각 크기 · 조각 겹침 · 문서당 조각 수 한도 |
+
+- 모델 목록은 2026-11 기준 무료 플랜에서 쓸 수 있고 [지원 종료 예정](https://developers.cloudflare.com/changelog/post/2026-11-05-planned-model-deprecations/)이 아닌 모델입니다. 모델은 자주 바뀌므로 바꾸기 전에 **[선택한 모델 시험]** 으로 이 계정에서 실제로 되는지 확인하세요.
+- 색인 항목(OCR 모델·조각 크기)은 새로 올리거나 "다시 색인"하는 문서부터 적용됩니다.
+- 임베딩 모델은 Vectorize 인덱스 차원(1024)과 맞아야 해서 화면에서 바꾸지 않습니다.
+
+## 답변 저장 (Markdown · Word · PDF)
+
+채팅 화면에서 답변마다 **저장 MD · Word · PDF** 버튼이 있고, 위쪽 **대화 저장…** 에서 지금까지의 대화 전체를 저장할 수 있습니다. 질문, 답변(표·목록 포함), 근거 문서 목록이 함께 들어갑니다. 서버를 거치지 않고 브라우저에서 바로 만듭니다(`public/export.js`).
+
+- **Word(.docx)**: 라이브러리 없이 ZIP 안에 Word XML 을 직접 넣어 만듭니다. 제목·표·목록·굵게가 Word 서식으로 들어가고 글꼴은 맑은 고딕입니다.
+- **PDF**: 한글 글꼴을 PDF 에 넣으려면 큰 글꼴 파일이 필요해서, 인쇄용 화면을 만들어 브라우저 인쇄 창을 엽니다. 대상(프린터)을 **"PDF로 저장"** 으로 고르세요.
+- HWPX 로 저장은 아직 없습니다. Word 파일을 한글에서 열어 HWPX 로 저장하면 됩니다.
+
 ## 모델과 설정값 (`wrangler.jsonc` 의 `vars`)
+
+아래 값은 관리 화면 "설정"의 **기본값**입니다(화면에서 저장한 값이 있으면 그 값이 우선).
 
 | 이름 | 기본값 | 설명 |
 | --- | --- | --- |
@@ -149,11 +180,11 @@ npm run deploy                           # https://doc-chatbot.<계정>.workers.
 | `MAX_CHUNKS_PER_DOC` | `400` | 문서 하나의 청크 한도 (Vectorize 무료 한도 보호) |
 
 모델은 자주 바뀝니다. 답변이 `5018`(이 계정은 모델 사용 불가), `5028`(지원 종료), `5035`(유료 플랜 필요) 오류로 실패하면
-[모델 목록](https://developers.cloudflare.com/workers-ai/models/)과 [지원 종료 공지](https://developers.cloudflare.com/changelog/product/workers-ai/)를 보고 `CHAT_MODEL` 을 바꾸세요.
+[모델 목록](https://developers.cloudflare.com/workers-ai/models/)과 [지원 종료 공지](https://developers.cloudflare.com/changelog/product/workers-ai/)를 보고 관리 화면 "설정"에서 답변 모델을 바꾸세요.
 채팅 화면에도 이 안내가 함께 표시됩니다.
 
-검색 개수(`TOP_K`), 관련도 기준(`MIN_SCORE`), 시스템 프롬프트는 `src/rag.ts`, 청크 크기는 `src/chunk.ts` 에 있습니다.
-진짜 모드로 처음 써 볼 때는 `MIN_SCORE.real`(0.35)이 너무 높거나 낮지 않은지, 화면의 근거 "유사도" 값을 보며 맞춰 보세요.
+검색 개수(topK), 관련도 기준(minScore), 시스템 프롬프트, 청크 크기는 관리 화면 "설정"에서 바꿉니다(기본 규칙 프롬프트는 `src/rag.ts`).
+진짜 모드로 처음 써 볼 때는 관련도 기준(0.35)이 너무 높거나 낮지 않은지, 화면의 근거 "유사도" 값을 보며 맞춰 보세요.
 
 검색은 **하이브리드**입니다. 벡터 검색(뜻이 비슷한 조각)에 더해, 질문 단어가 글자 그대로 들어 있는 조각을 D1 에서 찾아(`instr`) 후보에 넣고, 단어가 들어 있는 비율만큼 점수를 더해 다시 줄을 세웁니다. "SK시그넷"처럼 회사명·모델명·코드만 물으면 큰 표 조각과의 벡터 유사도가 기준(0.35)보다 낮게 나와 근거가 0개가 되고 "등록된 문서에서 찾지 못했습니다"가 나오기 쉬운데, 키워드 쪽이 이것을 잡아 줍니다. `npm run dev` 터미널에 `검색: 문서이름#조각(점수, 키워드)` 로그가 찍히니, 답이 이상하면 어떤 근거가 뽑혔는지 먼저 보세요.
 

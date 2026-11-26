@@ -6,6 +6,7 @@
 
 import { type Bindings, isMock } from "./auth";
 import { hwpxToMarkdown } from "./hwpx";
+import { type Settings, supportsThinkingSwitch } from "./settings";
 
 // ── 공통: Workers AI 호출 ─────────────────────────────────────
 
@@ -37,7 +38,7 @@ export const extOf = (filename: string) => filename.split(".").pop()?.toLowerCas
  * PDF·DOCX·엑셀(XLSX·XLSM·XLS)은 Workers AI 의 Markdown 변환(toMarkdown, 현재 베타)을 씁니다. 엑셀은 시트가 표로 바뀝니다.
  * toMarkdown 은 Neurons 를 쓰지 않는 변환 기능입니다(이미지 설명 생성 제외).
  */
-export async function extractText(env: Bindings, filename: string, bytes: ArrayBuffer, contentType: string) {
+export async function extractText(env: Bindings, filename: string, bytes: ArrayBuffer, contentType: string, ocrModel: string) {
   const ext = extOf(filename);
   if (ext === "txt" || ext === "md") return new TextDecoder("utf-8").decode(bytes);
   if (ext === "csv") return csvToMarkdown(decodeText(bytes));
@@ -47,7 +48,7 @@ export async function extractText(env: Bindings, filename: string, bytes: ArrayB
       throw new Error("연습 모드에는 글자를 읽을 비전 모델이 없어 이미지는 색인할 수 없습니다. npm run dev(진짜 AI 모드)에서 시험하세요.");
     throw new Error("연습 모드에서는 TXT·MD·CSV·HWPX 파일만 색인할 수 있습니다. PDF·DOCX·엑셀은 npm run dev(진짜 AI 모드)에서 시험하세요.");
   }
-  if (isImageExt(ext)) return ocrImage(env, bytes, contentType);
+  if (isImageExt(ext)) return ocrImage(env, bytes, contentType, ocrModel);
 
   const result = await env.AI!.toMarkdown({ name: filename, blob: new Blob([bytes], { type: contentType }) });
   if (result.format === "error") throw new Error(`문서 변환 실패: ${result.error}`);
@@ -57,7 +58,7 @@ export async function extractText(env: Bindings, filename: string, bytes: ArrayB
 /**
  * 이미지 속 글자 읽기(OCR): 비전 모델에 이미지를 보여 주고 "글자를 그대로 옮겨 적어라"라고 요청합니다.
  * toMarkdown 도 이미지를 받지만, 그쪽은 "이미지 설명"(영어 등)을 만드는 기능이라 표·코드표를 그대로 옮기기에는 맞지 않습니다.
- * 모델은 vars 의 OCR_MODEL (기본 gemma-4: 비전·OCR·한국어 지원, 무료 플랜 사용 가능).
+ * 모델은 관리 화면 설정의 OCR 모델 (기본값은 vars 의 OCR_MODEL: gemma-4, 비전·OCR·한국어 지원, 무료 플랜 사용 가능).
  */
 const OCR_PROMPT = `이 이미지에 보이는 글자를 그대로 옮겨 적으세요.
 규칙:
@@ -66,14 +67,14 @@ const OCR_PROMPT = `이 이미지에 보이는 글자를 그대로 옮겨 적으
 - 읽을 수 없는 글자는 [?] 로 적으세요.
 - 글자가 전혀 없으면 (글자 없음) 이라고만 적으세요.`;
 
-async function ocrImage(env: Bindings, bytes: ArrayBuffer, contentType: string): Promise<string> {
+async function ocrImage(env: Bindings, bytes: ArrayBuffer, contentType: string, model: string): Promise<string> {
   // 이미지를 base64 데이터 URL 로 만들어 메시지에 넣습니다. (큰 이미지는 요청이 커지므로 업로드에서 크기를 제한)
   let bin = "";
   const u8 = new Uint8Array(bytes);
   for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
   const dataUrl = `data:${contentType};base64,${btoa(bin)}`;
 
-  const res = (await runAi(env, env.OCR_MODEL, {
+  const res = (await runAi(env, model, {
     messages: [
       {
         role: "user",
@@ -86,7 +87,7 @@ async function ocrImage(env: Bindings, bytes: ArrayBuffer, contentType: string):
     max_tokens: 4096,
     temperature: 0, // 옮겨 적기는 창의성이 필요 없음
     // 생각 모드를 끄지 않으면 생각에 토큰을 다 쓰고 본문이 비어 올 수 있습니다(답변 모델과 같은 이유).
-    ...(/gemma-4|qwen3|glm-4\.7/.test(env.OCR_MODEL) ? { chat_template_kwargs: { enable_thinking: false } } : {}),
+    ...(supportsThinkingSwitch(model) ? { chat_template_kwargs: { enable_thinking: false } } : {}),
   })) as { response?: string; choices?: { message?: { content?: string | null }; finish_reason?: string }[] };
 
   const text = (res.response || res.choices?.[0]?.message?.content || "").trim();
@@ -256,7 +257,7 @@ export type ChatMessage = { role: "system" | "user" | "assistant"; content: stri
  *   data: {"choices":[{"delta":{"content":"안녕"}}]}  ← OpenAI 호환 형식(일부 모델)
  *   data: [DONE]
  */
-export async function* streamChat(env: Bindings, messages: ChatMessage[], mockAnswer: string): AsyncGenerator<string> {
+export async function* streamChat(env: Bindings, s: Settings, messages: ChatMessage[], mockAnswer: string): AsyncGenerator<string> {
   if (isMock(env)) {
     // 연습 모드: 미리 만든 답을 단어 단위로 조금씩 흘려 보내 스트리밍을 흉내 냅니다.
     for (const word of mockAnswer.split(/(?<=\s)/)) {
@@ -268,12 +269,13 @@ export async function* streamChat(env: Bindings, messages: ChatMessage[], mockAn
 
   // 생각(reasoning) 모드가 있는 모델은 기본으로 켜져 있어, 답을 쓰기 전에 생각에 토큰을 다 써 버리면 본문이 비어 옵니다.
   // 문서 근거 답변에는 생각 과정이 필요 없으므로 끕니다(gemma-4 등: chat_template_kwargs.enable_thinking).
-  const thinking = /gemma-4|qwen3|glm-4\.7/.test(env.CHAT_MODEL) ? { chat_template_kwargs: { enable_thinking: false } } : {};
-  const stream = (await runAi(env, env.CHAT_MODEL, {
+  // 관리 화면 설정에서 생각 모드를 켤 수 있습니다(켜면 답 전에 생각하느라 느려지고, 토큰 한도가 작으면 본문이 빌 수 있음).
+  const thinking = supportsThinkingSwitch(s.chatModel) ? { chat_template_kwargs: { enable_thinking: s.thinking } } : {};
+  const stream = (await runAi(env, s.chatModel, {
     messages,
     stream: true,
-    max_tokens: 1536, // 답변 길이 상한 = Neurons 사용량 상한
-    temperature: 0.2, // 문서 근거 답변이라 창의성보다 일관성
+    max_tokens: s.maxTokens, // 답변 길이 상한 = Neurons 사용량 상한 (설정)
+    temperature: s.temperature, // 문서 근거 답변이라 낮게(설정)
     ...thinking,
   })) as ReadableStream<Uint8Array>;
 
@@ -326,7 +328,7 @@ export async function* streamChat(env: Bindings, messages: ChatMessage[], mockAn
   if (!yielded) {
     throw new Error(
       reasoning
-        ? `모델이 생각(reasoning)만 하고 답을 쓰지 못했습니다(finish_reason=${finish ?? "?"}). 다른 CHAT_MODEL 을 써 보세요.`
+        ? `모델이 생각(reasoning)만 하고 답을 쓰지 못했습니다(finish_reason=${finish ?? "?"}). 관리 화면 설정에서 생각 모드를 끄거나 답변 길이 상한을 늘리거나 다른 모델을 골라 보세요.`
         : `모델이 빈 답변을 돌려주었습니다(finish_reason=${finish ?? "?"}). wrangler dev 터미널의 "LLM 스트림 예시" 로그를 확인하세요.`,
     );
   }
