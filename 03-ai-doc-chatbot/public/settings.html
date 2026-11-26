@@ -11,12 +11,14 @@
     <h1>⚙️ 설정</h1>
     <span id="mode" class="badge">확인 중…</span>
     <span class="spacer"></span>
-    <a href="/admin.html">🗂️ 문서 관리</a>
+    <span id="who" class="who" hidden></span>
+    <a href="/users.html" data-role="admin">👥 사용자·그룹</a>
+    <a href="/admin.html" data-role="manager">🗂️ 문서 관리</a>
     <a href="/">← 채팅으로</a>
   </header>
 
   <main class="admin">
-    <section class="card">
+    <section class="card" data-auth="token">
       <h2>관리자 토큰</h2>
       <form id="tokenForm" class="row">
         <input id="token" type="password" placeholder="ADMIN_TOKEN" autocomplete="off" style="min-width: 260px" />
@@ -33,7 +35,7 @@
         <span class="spacer" style="flex: 1"></span>
         <span id="settingsState" class="muted"></span>
       </div>
-      <p class="muted">관리자 토큰을 넣으면 보입니다. 저장하면 다음 질문부터 바로 쓰입니다. 색인 설정(OCR 모델·조각 크기)은 새로 올리거나 "다시 색인"하는 문서부터 적용됩니다.</p>
+      <p class="muted">관리자만 볼 수 있습니다. 저장하면 다음 질문부터 바로 쓰입니다. 색인 설정(OCR 모델·조각 크기)은 새로 올리거나 "다시 색인"하는 문서부터 적용됩니다.</p>
       <form id="settingsForm" class="settings" hidden>
         <fieldset>
           <legend>화면</legend>

@@ -73,23 +73,24 @@
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| GET | `/api/me` | 관리자 여부, 연습 모드 여부, 화면 제목, 모델 이름 |
-| GET | `/api/conversations` | 내 폴더·대화 목록 (헤더 `X-Client-Id`) |
+| GET | `/api/me` | 로그인 방식(`authMode`)·내 이메일과 역할, 연습 모드 여부, 화면 제목, 모델 이름 |
+| GET | `/api/conversations` | 내 폴더·대화 목록 (로그인하면 이메일 기준, 아니면 헤더 `X-Client-Id`) |
 | POST · PATCH · DELETE | `/api/conversations/folders[/:id]` | 폴더 만들기·이름 바꾸기·삭제(`?withConversations=1` 이면 대화도 삭제) |
 | POST · PATCH · DELETE | `/api/conversations[/:id]` | 대화 등록·제목/폴더 바꾸기·삭제(기록도 지움) |
 | GET · PUT · DELETE | `/api/settings` | 설정 읽기(외부 AI 키 유무 포함) · 일부 바꾸기 · 모두 기본값으로 (관리자) |
 | POST | `/api/settings/test` | 모델 시험. 본문 `{ "model": "@cf/..." }` (관리자) |
-| GET | `/api/documents` | 문서 목록 + 전체 청크 수 |
-| POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`). PDF·DOCX·HWPX·XLSX·XLSM·XLS·CSV·TXT·MD 10MB, JPG·PNG·WebP 4MB 까지 (관리자) |
-| GET | `/api/documents/:id/file` | 원본 열기, `?download=1` 이면 내려받기 |
-| PATCH | `/api/documents/:id` | 이름 수정. 본문 `{ "name": "..." }` (관리자) |
-| POST | `/api/documents/:id/reindex` | 다시 색인 (관리자) |
-| DELETE | `/api/documents/:id` | 삭제: R2 원본, D1 행·청크, Vectorize 벡터 모두 (관리자) |
+| GET | `/api/documents` | 문서 목록 + 전체 청크 수 (내가 볼 수 있는 문서만) |
+| POST | `/api/documents` | 업로드 (multipart `file`, 선택 `name`·`groupId`). PDF·DOCX·HWPX·XLSX·XLSM·XLS·CSV·TXT·MD 10MB, JPG·PNG·WebP 4MB 까지 (매니저 이상) |
+| GET | `/api/documents/:id/file` | 원본 열기, `?download=1` 이면 내려받기 (볼 수 없는 문서는 404) |
+| PATCH | `/api/documents/:id` | 이름·공개 범위 수정. 본문 `{ "name"?: "...", "groupId"?: 3 \| null }` (매니저 이상) |
+| POST | `/api/documents/:id/reindex` | 다시 색인 (매니저 이상) |
+| DELETE | `/api/documents/:id` | 삭제: R2 원본, D1 행·청크, Vectorize 벡터 모두 (매니저 이상) |
+| GET · POST · PATCH · DELETE | `/api/users[/:email]` | 직원 계정 목록·미리 등록·역할/사용/그룹 바꾸기·삭제 (관리자) |
+| GET · POST · PATCH · DELETE | `/api/groups[/:id]` | 그룹 목록(매니저 이상)·만들기·이름 바꾸기·삭제(관리자) |
 | DELETE | `/api/documents?confirm=all` | 모두 삭제. 관리 화면의 "모두 삭제" 버튼은 `모두 삭제` 라고 입력해야 실행됩니다 (관리자) |
 | WS | `/agents/chat-agent/:대화id` | 채팅. 메시지 형식은 `src/agent.ts` 참고 |
 
-관리자 API 는 헤더 `Authorization: Bearer <ADMIN_TOKEN>` 이 필요합니다. 질문과 원본 열기는 누구나 할 수 있습니다.
-사내에서만 쓰게 하려면 [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)(Zero Trust, 50명까지 무료)를 Worker 앞에 두세요.
+권한은 아래 [직원 전용으로 쓰기](#직원-전용으로-쓰기-zero-trust-access--권한) 를 보세요. Access 를 켜기 전에는 예전처럼 관리 API 에 헤더 `Authorization: Bearer <ADMIN_TOKEN>` 이 필요하고, 토큰이 없는 사람은 "전 직원" 문서만 보고 질문할 수 있습니다.
 
 ## 실행 방법 1: 연습 모드 (로그인 불필요)
 
@@ -142,8 +143,8 @@ npm run dev                              # AI·Vectorize 는 원격(실제 계�
 ### 3) 배포 (직접 할 때만)
 
 ```powershell
-npx wrangler secret put ADMIN_TOKEN      # 배포용 관리자 토큰
-npm run db:migrate:remote                # 새 마이그레이션(예: 0002_settings, 0003_conversations)이 생기면 배포 전에 꼭 다시 실행
+npx wrangler secret put ADMIN_TOKEN      # 배포용 관리자 토큰 (Zero Trust Access 를 켜면 필요 없음)
+npm run db:migrate:remote                # 새 마이그레이션(예: 0003_conversations, 0004_users_access)이 생기면 배포 전에 꼭 다시 실행
 npm run deploy                           # https://doc-chatbot.<계정>.workers.dev
 ```
 
@@ -158,8 +159,65 @@ ChatGPT·Claude 대화창처럼 왼쪽에 대화 목록이 있습니다.
 - 대화를 누르면 그 대화의 기록이 열리고, 이어서 질문할 수 있습니다(대화마다 ChatAgent 인스턴스가 하나씩).
 - 대화의 **⋯** 메뉴: 이름 바꾸기 · 폴더로 옮기기 · 삭제. 대화를 폴더로 **끌어다 놓아도** 옮겨집니다.
 - 폴더의 **⋯** 메뉴: 이름 바꾸기 · 폴더만 삭제(대화는 "폴더 없음"으로) · 폴더와 대화 모두 삭제.
-- 목록은 D1(`folders`, `conversations`)에 저장되지만, 로그인이 없어서 **브라우저마다 따로**입니다(localStorage 의 무작위 id 를 `X-Client-Id` 로 보냄). 다른 PC·브라우저에서는 보이지 않습니다. 사람별로 묶으려면 Cloudflare Access 를 앞에 두고 로그인 이메일을 owner 로 쓰도록 바꾸면 됩니다.
+- 목록은 D1(`folders`, `conversations`)에 저장됩니다. Zero Trust Access 로 로그인하면 **사람(이메일)별**이라 어느 PC 에서나 같은 목록이 보이고, 남의 대화에는 연결할 수 없습니다(403). 로그인이 없으면(토큰 방식) **브라우저마다 따로**입니다(localStorage 의 무작위 id 를 `X-Client-Id` 로 보냄). 로그인 전에 만든 대화는 같은 브라우저로 처음 로그인할 때 내 계정 목록으로 옮겨집니다.
 - 폴더 기능 전에 쓰던 대화가 있으면 처음 열 때 "이전 대화"로 목록에 들어갑니다.
+
+## 직원 전용으로 쓰기 (Zero Trust Access + 권한)
+
+로그인은 **Cloudflare Access**(Zero Trust, 50명까지 무료)가 맡고, 이 앱은 Access 가 붙여 주는 서명 토큰(`Cf-Access-Jwt-Assertion` 헤더, 브라우저는 `CF_Authorization` 쿠키)을
+팀 공개키(`https://<팀>.cloudflareaccess.com/cdn-cgi/access/certs`)로 직접 검증해 **이메일**을 얻습니다(`src/auth.ts`). 권한은 D1 `users` 표의 역할로 정합니다.
+
+| 역할 | 할 수 있는 일 |
+| --- | --- |
+| 관리자 (admin) | 전부. 설정, 사용자·그룹 관리(`/users.html`), 문서 모두 삭제 |
+| 매니저 (manager) | 문서 올리기·이름/공개 범위 바꾸기·다시 색인·삭제, 모든 문서 보기 |
+| 직원 (employee) | 채팅. **전 직원 문서 + 내 그룹 문서**만 목록·원본·검색에 나옴 |
+
+- **그룹**(부서·팀)을 만들고 직원을 넣은 뒤, 문서 관리에서 문서마다 "공개 범위"를 고릅니다. 비우면 전 직원. 그룹 전용 문서는 그룹 밖 직원의 채팅 검색에서도 빠집니다.
+- 처음 접속한 사람은 '직원'으로 자동 등록됩니다(`ACCESS_AUTO_SIGNUP="0"` 이면 관리자가 미리 등록한 사람만).
+- `ADMIN_EMAILS` 의 사람은 항상 관리자이고 사용 중지·삭제할 수 없습니다(잠김 방지). 자기 자신의 역할·사용 여부도 바꿀 수 없습니다.
+- Access 를 켜면 `ADMIN_TOKEN` 은 더 이상 쓰이지 않습니다. 토큰 입력 칸도 화면에서 사라집니다.
+
+### 1) Cloudflare 대시보드 설정 (한 번만)
+
+> 채팅이 **WebSocket** 을 쓰므로, Workers & Pages 의 Worker 단위 "Access" 탭(One-click Access)이 아니라 **사용자 지정 도메인 + Self-hosted 애플리케이션**으로 설정하세요. Worker 단위 Access 는 WebSocket 을 지원하지 않습니다([공식 문서](https://developers.cloudflare.com/workers/configuration/cloudflare-access/)).
+
+1. **사용자 지정 도메인 연결**: Workers & Pages → `doc-chatbot` → Settings → Domains & Routes → Add → Custom domain (예: `chat.naturetec.kr`, Cloudflare 에 등록된 도메인이어야 함).
+2. **workers.dev 끄기**: 같은 화면에서 `workers.dev` 와 Preview URLs 를 Disable. (켜 두어도 API 는 토큰 검증 때문에 401 이지만, 화면 파일이 보이지 않게 끄는 편이 깔끔합니다.)
+3. **팀 도메인 확인**: Zero Trust 대시보드 → Settings → Team name and domain(팀 이름·도메인) → `<팀>.cloudflareaccess.com`.
+4. **로그인 방법**: Zero Trust → Settings → Authentication → Login methods. 기본 **One-time PIN**(메일로 받은 코드)이면 바로 됩니다. Google Workspace·Microsoft Entra ID 도 추가할 수 있습니다.
+5. **애플리케이션 만들기**: Zero Trust → Access controls → Applications → Add an application → **Self-hosted** → 이름 `문서 챗봇`, Public hostname 에 1번 도메인(`chat.naturetec.kr`), 세션 시간은 원하는 값(예: 24시간).
+6. **정책(Policy)**: Action **Allow**, Include → **Emails ending in** → `@naturetec.kr` (특정 사람만이면 Emails 로 하나씩).
+7. **AUD 태그 복사**: 만든 애플리케이션 → Edit → (Basic information 또는 Additional settings) → **Application Audience (AUD) Tag** 복사.
+
+### 2) 이 앱에 값 넣기 (`wrangler.jsonc` 의 `vars`, 직접 입력)
+
+```jsonc
+"ACCESS_TEAM_DOMAIN": "naturetec.cloudflareaccess.com", // 3번 (https:// 는 있어도 없어도 됨, "naturetec" 만 써도 됨)
+"ACCESS_AUD": "<7번에서 복사한 AUD 태그>",
+"ADMIN_EMAILS": "admin@naturetec.kr",               // 처음 관리자(쉼표로 여러 명)
+"ACCESS_AUTO_SIGNUP": "1"
+```
+
+둘 중 하나만 넣으면 설정 오류로 보고 **모든 요청을 막습니다**(500). 그다음 `npm run types` → `npm run db:migrate:remote`(0004 적용) → 배포.
+
+### 3) 확인
+
+1. 시크릿 창에서 `https://chat.naturetec.kr` → Access 로그인 화면 → 회사 메일로 코드 받아 로그인.
+2. 머리줄에 `👤 이메일 · 관리자` 와 **로그아웃** 이 보이면 성공. `/users.html` 에서 그룹을 만들고 직원 역할·그룹을 정합니다.
+3. 다른 직원 계정으로 로그인해 ⚙️·👥·문서 관리 메뉴가 안 보이는지, 그룹 전용 문서가 목록·답변 근거에 안 나오는지 봅니다.
+
+### 로컬에서 시험하기 (개발용 로그인 우회)
+
+Access 는 로컬에서 흉내 낼 수 없어서, **localhost 에서만** 동작하는 우회를 둡니다. `.dev.vars` 에 `DEV_AUTH=1`, `DEV_USER_EMAIL=...` 을 넣거나 명령에 `--var` 로 줍니다.
+`.dev.vars` 는 배포되지 않고, 주소가 localhost 가 아니면 무시되므로 운영에서 켜질 수 없습니다. 요청 헤더 `x-dev-user-email` 로 사람을 바꿔 볼 수 있습니다.
+
+```powershell
+npm run db:migrate:mock
+npx wrangler dev --env mock --var DEV_AUTH:1 --var ADMIN_EMAILS:boss@naturetec.kr --var DEV_USER_EMAIL:boss@naturetec.kr
+# 다른 창에서: 관리자·매니저·직원 역할, 그룹 공개 범위, 사람별 대화를 자동 확인
+npm run smoke:auth
+```
 
 ## 설정 화면 (`/settings.html`)
 
@@ -236,6 +294,9 @@ npx wrangler secret put ANTHROPIC_API_KEY
 | `MAX_UPLOAD_MB` | `10` | 업로드 크기 한도 |
 | `MAX_IMAGE_MB` | `4` | 이미지 업로드 크기 한도 (base64 로 모델에 보내므로 작게) |
 | `MAX_CHUNKS_PER_DOC` | `400` | 문서 하나의 청크 한도 (Vectorize 무료 한도 보호) |
+| `ACCESS_TEAM_DOMAIN` · `ACCESS_AUD` | 빈 값 | Zero Trust Access 팀 도메인과 애플리케이션 AUD 태그. 둘 다 넣으면 직원 로그인·권한이 켜짐 |
+| `ADMIN_EMAILS` | 빈 값 | 항상 관리자인 이메일(쉼표 구분) |
+| `ACCESS_AUTO_SIGNUP` | `1` | `0` 이면 관리자가 미리 등록한 사람만 사용 |
 
 모델은 자주 바뀝니다. 답변이 `5018`(이 계정은 모델 사용 불가), `5028`(지원 종료), `5035`(유료 플랜 필요) 오류로 실패하면
 [모델 목록](https://developers.cloudflare.com/workers-ai/models/)과 [지원 종료 공지](https://developers.cloudflare.com/changelog/product/workers-ai/)를 보고 설정 화면에서 답변 모델을 바꾸세요.

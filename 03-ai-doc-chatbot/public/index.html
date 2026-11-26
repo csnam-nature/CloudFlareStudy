@@ -21,8 +21,10 @@
       <option value="docx">Word (.docx)</option>
       <option value="pdf">PDF (인쇄 → PDF로 저장)</option>
     </select>
-    <a href="/admin.html">문서 관리</a>
-    <a href="/settings.html" title="설정">⚙️</a>
+    <span id="who" class="who" hidden></span>
+    <a href="/admin.html" data-role="manager">문서 관리</a>
+    <a href="/users.html" data-role="admin" title="사용자·그룹">👥</a>
+    <a href="/settings.html" data-role="admin" title="설정">⚙️</a>
   </header>
 
   <div class="layout">
@@ -33,7 +35,7 @@
     </div>
     <input id="convSearch" type="text" placeholder="대화 검색" />
     <div id="tree"><div class="muted side-empty">불러오는 중…</div></div>
-    <div class="muted side-foot">목록은 이 브라우저에 저장됩니다. 대화를 폴더로 끌어다 놓아 옮길 수 있습니다.</div>
+    <div class="muted side-foot"><span id="listScope">목록은 이 브라우저에 저장됩니다.</span> 대화를 폴더로 끌어다 놓아 옮길 수 있습니다.</div>
   </aside>
   <div class="chatmain">
   <section id="messages">
@@ -66,7 +68,7 @@
     <div class="empty">
       <h2>무엇이든 물어보세요</h2>
       <p class="folder-note" hidden></p>
-      <p>관리자가 올린 네이처텍 문서(PDF·Word·한글·엑셀·이미지 등)에서 근거를 찾아 답합니다.</p>
+      <p>관리자가 올린 네이처텍 문서(PDF·Word·한글·엑셀·이미지 등) 가운데 내가 볼 수 있는 문서에서 근거를 찾아 답합니다.</p>
       <div class="examples">
         <button type="button">E-21 오류는 무엇인가요?</button>
         <button type="button">충전 시작 절차를 알려 주세요</button>

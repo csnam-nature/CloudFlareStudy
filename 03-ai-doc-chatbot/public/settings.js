@@ -1,5 +1,5 @@
 // 설정 화면: 화면 제목 · 답변 모델(Workers AI · OpenAI · Claude) · 검색 · 색인 값
-import { $, auth, esc, showMode, TOKEN_KEY, toast } from "./common.js";
+import { $, auth, esc, guardPage, showMode, TOKEN_KEY, toast } from "./common.js";
 
 // ── 토큰 ──────────────────────────────────────────────
 
@@ -8,9 +8,11 @@ tokenInput.value = localStorage.getItem(TOKEN_KEY) ?? "";
 
 async function checkToken() {
   const me = await showMode($("#mode"), auth());
-  if (!me) return;
+  if (!me) return false;
+  if (!guardPage(me, "admin")) return false;
   const has = !!localStorage.getItem(TOKEN_KEY);
   $("#tokenState").textContent = me.admin ? "✅ 관리자 확인됨" : has ? "❌ 토큰이 맞지 않습니다" : "토큰을 입력하세요";
+  return true;
 }
 $("#tokenForm").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -149,8 +151,7 @@ $("#testModel").addEventListener("click", async () => {
   out.textContent = r.ok ? `✅ 사용 가능 (${r.ms}ms, 답: ${r.sample})` : `❌ ${r.error}`;
 });
 
-checkToken();
-loadSettings();
+checkToken().then((ok) => ok && loadSettings());
 
 // 기본 시스템 프롬프트를 칸에 채워 고칠 수 있게 합니다(저장은 [설정 저장]으로).
 $("#loadDefaultPrompt").addEventListener("click", () => {

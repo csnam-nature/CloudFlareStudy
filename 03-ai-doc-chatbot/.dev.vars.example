@@ -8,3 +8,8 @@ VECTOR_NAMESPACE=dev
 # ANTHROPIC_API_KEY=sk-ant-...
 # AI Gateway 에 인증을 켰다면(선택)
 # CF_AIG_TOKEN=...
+# 개발용 로그인 우회(선택): localhost 에서만 동작. 직원·역할 화면을 로컬에서 볼 때 앞의 # 을 지우세요.
+# 헤더 x-dev-user-email 이 있으면 그 사람, 없으면 DEV_USER_EMAIL. ADMIN_EMAILS 에 넣은 사람은 관리자.
+# DEV_AUTH=1
+# DEV_USER_EMAIL=boss@naturetec.kr
+# ADMIN_EMAILS=boss@naturetec.kr

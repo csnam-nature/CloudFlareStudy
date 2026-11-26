@@ -14,6 +14,7 @@
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke-test.mjs",
+    "smoke:auth": "node scripts/smoke-auth.mjs",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

@@ -4,7 +4,7 @@
 // LLM 은 학습 때 본 적 없는 사내 문서를 모르므로, 찾은 근거를 프롬프트에 넣어 "이것만 보고 답하라"고 시킵니다.
 
 import { type ChatMessage, embed, queryVectors } from "./ai";
-import type { Bindings } from "./auth";
+import { type Bindings, scopeSql } from "./auth";
 import type { Settings } from "./settings";
 
 export type Source = { id: string; docId: number; docName: string; seq: number; score: number; text: string };
@@ -25,15 +25,27 @@ const KEYWORD_LIMIT = 20;
  * 왜 키워드도 쓰나? "SK시그넷"처럼 짧은 회사명·모델명·코드만 물으면, 수십 행짜리 표 조각과의 벡터 유사도는
  * 낮게 나와(문장 뜻이 거의 없으므로) 기준(minScore) 아래로 떨어지기 쉽습니다. 그러면 근거가 0개가 되어
  * 모델은 "등록된 문서에서 찾지 못했습니다"라고 답합니다. 이름·번호 같은 것은 글자 그대로 찾는 편이 정확합니다.
+ *
+ * scope: 질문한 사람이 볼 수 있는 문서 범위(src/auth.ts docScope). null = 전부, 배열 = 전 직원 공개 + 그 그룹들.
+ * 벡터 검색은 범위를 모르고 뽑으므로, 원문을 D1 에서 꺼낼 때 범위 밖 문서를 뺍니다. 그래서 범위가 있으면 후보를 두 배로 뽑습니다.
  */
-export async function retrieve(env: Bindings, s: Settings, question: string, mock: boolean, docId?: number): Promise<Source[]> {
+export async function retrieve(
+  env: Bindings,
+  s: Settings,
+  question: string,
+  mock: boolean,
+  docId?: number,
+  scope: number[] | null = null,
+): Promise<Source[]> {
   const minScore = mock ? MOCK_MIN_SCORE : s.minScore;
   const mode = mock ? "mock" : "real";
   const words = queryWords(question);
+  const vis = scopeSql(scope, "d");
   const [qvec] = await embed(env, [question]);
+  const candidates = Math.min(100, Math.max(CANDIDATES[mode], s.topK * 2) * (scope === null ? 1 : 2));
   const [vecMatches, keywordIds] = await Promise.all([
-    queryVectors(env, qvec, Math.max(CANDIDATES[mode], s.topK * 2), docId),
-    keywordSearch(env, words, docId),
+    queryVectors(env, qvec, candidates, docId),
+    keywordSearch(env, words, docId, vis),
   ]);
 
   const vecScore = new Map(vecMatches.map((m) => [m.id, m.score]));
@@ -48,9 +60,9 @@ export async function retrieve(env: Bindings, s: Settings, question: string, moc
   const { results } = await env.DB.prepare(
     `SELECT c.id, c.doc_id, c.seq, c.text, d.name
        FROM chunks c JOIN documents d ON d.id = c.doc_id
-      WHERE c.id IN (${list.map(() => "?").join(",")})`,
+      WHERE c.id IN (${list.map(() => "?").join(",")})${vis.sql}`,
   )
-    .bind(...list)
+    .bind(...list, ...vis.args)
     .all<{ id: string; doc_id: number; seq: number; text: string; name: string }>();
 
   // 최종 점수 = 벡터 점수 + 키워드 점수(질문 단어가 들어 있는 비율 × 0.5). 그 사이 삭제된 청크는 결과에 없으므로 빠집니다.
@@ -66,14 +78,16 @@ export async function retrieve(env: Bindings, s: Settings, question: string, moc
 }
 
 /** 질문 단어가 그대로 들어 있는 청크 id (D1 에서 글자 검색). 단어마다 최대 KEYWORD_LIMIT 개. */
-async function keywordSearch(env: Bindings, words: string[], docId?: number): Promise<string[]> {
+async function keywordSearch(env: Bindings, words: string[], docId: number | undefined, vis: { sql: string; args: number[] }): Promise<string[]> {
   // 너무 흔한 짧은 말은 빼고, 긴 단어(회사명·코드일 가능성이 큼)부터 최대 4개만 찾습니다.
   const terms = [...words].sort((a, b) => b.length - a.length).slice(0, 4);
   if (!terms.length) return [];
   const stmts = terms.map((w) =>
     env.DB.prepare(
-      `SELECT id FROM chunks WHERE instr(lower(text), ?) > 0 ${docId ? "AND doc_id = ?" : ""} ORDER BY doc_id DESC, seq LIMIT ${KEYWORD_LIMIT}`,
-    ).bind(...(docId ? [w, docId] : [w])),
+      `SELECT c.id FROM chunks c JOIN documents d ON d.id = c.doc_id
+        WHERE instr(lower(c.text), ?) > 0 ${docId ? "AND c.doc_id = ?" : ""}${vis.sql}
+        ORDER BY c.doc_id DESC, c.seq LIMIT ${KEYWORD_LIMIT}`,
+    ).bind(...(docId ? [w, docId] : [w]), ...vis.args),
   );
   const res = await env.DB.batch<{ id: string }>(stmts);
   return [...new Set(res.flatMap((r) => r.results.map((x) => x.id)))];

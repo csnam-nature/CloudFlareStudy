@@ -68,6 +68,19 @@ header.top .spacer { flex: 1; }
 .badge.ready { background: #dafbe1; color: var(--ok); }
 .badge.queued, .badge.indexing { background: #fff8c5; color: var(--warn); }
 .badge.failed { background: #ffebe9; color: var(--err); }
+.badge.role-admin { background: #ffebe9; color: var(--err); }
+.badge.role-manager { background: #ddf4ff; color: #0969da; }
+.badge.role-employee { background: #eef1f4; color: var(--muted); }
+
+/* 머리줄의 로그인 정보 */
+.who { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.who-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 사용자·그룹 화면 */
+table.users td, table.users th { vertical-align: top; }
+table.users tr.inactive td { opacity: 0.55; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.chips label { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; white-space: nowrap; }
 
 /* ── 채팅 화면 ── */
 body.chat { display: flex; flex-direction: column; }

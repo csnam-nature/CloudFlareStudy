@@ -1,8 +1,9 @@
 // 대화 목록·폴더 API (왼쪽 사이드바)
 //
-// 로그인이 없어서, 브라우저가 처음 열릴 때 만든 무작위 id 를 X-Client-Id 헤더로 보내 "내 목록"을 구분합니다.
-// 같은 브라우저(같은 localStorage)에서만 목록이 보이고, 다른 PC 에서는 따로입니다.
-// 사람별로 나누려면 Cloudflare Access 를 앞에 두고 Cf-Access-Authenticated-User-Email 헤더를 owner 로 쓰면 됩니다(README).
+// "내 목록"의 주인(owner)
+//   - Zero Trust Access(또는 로컬 개발용 우회)로 로그인했으면 이메일 → 어느 PC·브라우저에서든 같은 목록
+//   - 로그인이 없으면(관리자 토큰 방식) 브라우저가 처음 만든 무작위 id(X-Client-Id 헤더) → 같은 브라우저에서만 보임
+// 로그인 전에 이 브라우저에서 만든 대화는, 같은 브라우저로 처음 로그인했을 때 그 사람의 목록으로 한 번 옮겨 줍니다.
 //
 // 대화 내용 자체는 대화 id 를 이름으로 하는 ChatAgent(Durable Object)에 있습니다. 여기서는 제목·폴더·시각만 다룹니다.
 
@@ -18,26 +19,41 @@ const MAX_CONVERSATIONS = 1000;
 type FolderRow = { id: number; name: string; created_at: number };
 type ConvRow = { id: string; folder_id: number | null; title: string; created_at: number; updated_at: number };
 
-export const conversations = new Hono<AppEnv & { Variables: { owner: string } }>();
+type ConvEnv = AppEnv & { Variables: { owner: string; clientId: string } };
+export const conversations = new Hono<ConvEnv>();
 
-// 모든 요청: X-Client-Id 확인
+// 모든 요청: 주인 정하기 (로그인한 이메일, 없으면 X-Client-Id)
 conversations.use("*", async (c, next) => {
-  const owner = c.req.header("x-client-id") ?? "";
-  if (!ID_RE.test(owner)) return c.json({ error: "X-Client-Id 헤더(브라우저 id)가 필요합니다." }, 400);
-  c.set("owner", owner);
+  const user = c.get("user");
+  const clientId = c.req.header("x-client-id") ?? "";
+  if (user.via === "access" || user.via === "dev") {
+    c.set("owner", user.email);
+    c.set("clientId", ID_RE.test(clientId) ? clientId : "");
+  } else {
+    if (!ID_RE.test(clientId)) return c.json({ error: "X-Client-Id 헤더(브라우저 id)가 필요합니다." }, 400);
+    c.set("owner", clientId);
+    c.set("clientId", "");
+  }
   await next();
 });
 
 const cleanName = (v: unknown, max: number) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 const parseId = (s: string) => (/^\d+$/.test(s) ? Number(s) : NaN);
 
-async function ownsFolder(c: Context<AppEnv & { Variables: { owner: string } }>, id: number) {
+async function ownsFolder(c: Context<ConvEnv>, id: number) {
   return !!(await c.env.DB.prepare("SELECT 1 FROM folders WHERE id = ? AND owner = ?").bind(id, c.get("owner")).first());
 }
 
 // 사이드바 전체: 폴더 + 대화(최근 순)
 conversations.get("/", async (c) => {
   const owner = c.get("owner");
+  // 로그인 전에 이 브라우저(X-Client-Id)로 만든 대화·폴더를 내 계정으로 옮깁니다(처음 한 번만 실제로 바뀜).
+  const clientId = c.get("clientId");
+  if (clientId)
+    await c.env.DB.batch([
+      c.env.DB.prepare("UPDATE folders SET owner = ? WHERE owner = ?").bind(owner, clientId),
+      c.env.DB.prepare("UPDATE conversations SET owner = ? WHERE owner = ?").bind(owner, clientId),
+    ]);
   const [f, v] = await c.env.DB.batch([
     c.env.DB.prepare("SELECT id, name, created_at FROM folders WHERE owner = ? ORDER BY name COLLATE NOCASE, id").bind(owner),
     c.env.DB.prepare(

@@ -6,7 +6,7 @@
 //    새 대화는 첫 질문을 보낼 때 목록에 등록되고(제목 = 첫 질문), 그다음 연결해서 질문을 보냅니다.
 // 서버 쪽 메시지 형식은 src/agent.ts 맨 위 주석에 있습니다.
 
-import { $, esc, showMode, toast } from "./common.js";
+import { $, esc, isAccount, showMode, toast } from "./common.js";
 import { blocksToHtml, exportItems, parseBlocks } from "./export.js";
 import { createSidebar } from "./sidebar.js";
 
@@ -362,6 +362,8 @@ async function loadDocs() {
 
 showMode($("#mode")).then((me) => {
   if (me?.appTitle) appTitle = me.appTitle;
+  // 로그인(Access)하면 대화 목록이 계정에 저장되어 어느 PC 에서나 같습니다.
+  if (isAccount(me)) $("#listScope").textContent = "목록은 내 계정에 저장됩니다(어느 PC 에서나 같음).";
   // 웹 검색: Claude·OpenAI 모델이고 관리자가 허용했을 때만 켤 수 있음. 못 쓰면 이유를 툴팁으로 보여 줌
   const w = me?.webSearch ?? { available: false, reason: "서버 정보를 읽지 못했습니다." };
   webBox.disabled = !w.available;

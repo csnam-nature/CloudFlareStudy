@@ -1,5 +1,5 @@
 // 문서 관리 화면: 업로드 · 목록 · 원본 열기 · 이름 수정 · 다시 색인 · 삭제 (설정은 settings.html)
-import { $, auth, esc, fmtBytes, fmtTime, showMode, TOKEN_KEY, toast } from "./common.js";
+import { $, auth, esc, fmtBytes, fmtTime, guardPage, showMode, TOKEN_KEY, toast } from "./common.js";
 
 const VECTORIZE_FREE_CHUNKS = Math.floor(5_000_000 / 1024); // 무료 저장 한도 ≈ 4,882개(1024차원 기준)
 const STATUS = { queued: "대기", indexing: "색인 중", ready: "완료", failed: "실패" };
@@ -8,6 +8,7 @@ const tokenInput = $("#token");
 tokenInput.value = localStorage.getItem(TOKEN_KEY) ?? "";
 
 let docs = [];
+let groups = []; // 문서 공개 범위로 고를 수 있는 그룹 [{ id, name }]
 let editingId = null;
 let pollTimer;
 
@@ -15,21 +16,36 @@ let pollTimer;
 
 async function checkToken() {
   const me = await showMode($("#mode"), auth());
-  if (!me) return;
+  if (!me) return false;
+  // 계정 로그인(Access)에서 직원이면 이 화면을 쓸 수 없습니다.
+  if (!guardPage(me, "manager")) return false;
   $("#maxMb").textContent = me.maxUploadMb;
+  $("#deleteAll").hidden = !me.admin; // 모두 삭제는 관리자만
   const has = !!localStorage.getItem(TOKEN_KEY);
   $("#tokenState").textContent = me.admin ? "✅ 관리자 확인됨" : has ? "❌ 토큰이 맞지 않습니다" : "토큰을 입력하세요";
+  await loadGroups();
+  return true;
+}
+
+/** 공개 범위(그룹) 목록. 매니저 이상만 읽을 수 있고, 못 읽으면 "전 직원"만 보입니다. */
+async function loadGroups() {
+  const res = await fetch("/api/groups", { headers: auth() }).catch(() => null);
+  groups = res?.ok ? (await res.json()).groups : [];
+  const sel = $("#uploadGroup");
+  const keep = sel.value;
+  sel.innerHTML = `<option value="">전 직원</option>` + groups.map((g) => `<option value="${g.id}">👥 ${esc(g.name)}</option>`).join("");
+  sel.value = groups.some((g) => String(g.id) === keep) ? keep : "";
 }
 
 $("#tokenForm").addEventListener("submit", (e) => {
   e.preventDefault();
   localStorage.setItem(TOKEN_KEY, tokenInput.value.trim());
-  checkToken();
+  checkToken().then(load);
 });
 $("#clearToken").onclick = () => {
   localStorage.removeItem(TOKEN_KEY);
   tokenInput.value = "";
-  checkToken();
+  checkToken().then(load);
 };
 
 // ── 업로드 ────────────────────────────────────────────
@@ -53,6 +69,7 @@ async function uploadFiles(files) {
     log.textContent = `올리는 중: ${f.name} (${fmtBytes(f.size)})`;
     const form = new FormData();
     form.append("file", f);
+    form.append("groupId", $("#uploadGroup").value);
     const res = await fetch("/api/documents", { method: "POST", headers: auth(), body: form });
     const data = await res.json().catch(() => ({}));
     if (res.ok) toast(`올렸습니다: ${f.name} → 색인 대기`);
@@ -66,7 +83,7 @@ async function uploadFiles(files) {
 
 async function load() {
   try {
-    const data = await (await fetch("/api/documents")).json();
+    const data = await (await fetch("/api/documents", { headers: auth() })).json();
     docs = data.documents;
     render(data.totalChunks);
   } catch {
@@ -84,7 +101,7 @@ function render(totalChunks) {
 
   const rows = $("#rows");
   if (!docs.length) {
-    rows.innerHTML = `<tr><td colspan="6" class="muted">아직 문서가 없습니다. 위에서 올려 보세요.</td></tr>`;
+    rows.innerHTML = `<tr><td colspan="7" class="muted">아직 문서가 없습니다. 위에서 올려 보세요.</td></tr>`;
     return;
   }
   rows.innerHTML = docs
@@ -100,6 +117,7 @@ function render(totalChunks) {
         <td class="num hide-sm">${fmtBytes(d.size)}</td>
         <td class="num">${d.chunkCount}</td>
         <td><span class="badge ${d.status}">${STATUS[d.status]}</span></td>
+        <td>${groupSelect(d)}</td>
         <td class="hide-sm muted">${fmtTime(d.createdAt)}</td>
         <td><div class="actions">
           <a href="/api/documents/${d.id}/file" target="_blank" rel="noopener">열기</a>
@@ -112,6 +130,24 @@ function render(totalChunks) {
     .join("");
   rows.querySelector(".rename")?.focus();
 }
+
+/** 문서마다 공개 범위 고르기. 그 사이 지워진 그룹이면 이름만 보여 줌 */
+function groupSelect(d) {
+  const opts = [{ id: "", name: "전 직원" }, ...groups.map((g) => ({ id: g.id, name: `👥 ${g.name}` }))];
+  if (d.groupId != null && !groups.some((g) => g.id === d.groupId)) opts.push({ id: d.groupId, name: `👥 ${d.groupName ?? d.groupId}` });
+  return `<select class="grp" data-id="${d.id}" title="이 문서를 볼 수 있는 사람">${opts
+    .map((o) => `<option value="${o.id}" ${String(o.id) === String(d.groupId ?? "") ? "selected" : ""}>${esc(o.name)}</option>`)
+    .join("")}</select>`;
+}
+
+$("#rows").addEventListener("change", async (e) => {
+  if (!e.target.classList.contains("grp")) return;
+  const id = Number(e.target.dataset.id);
+  const v = e.target.value;
+  if (await api("PATCH", `/api/documents/${id}`, { groupId: v ? Number(v) : null }))
+    toast(v ? `공개 범위: ${groups.find((g) => String(g.id) === v)?.name} 그룹만` : "공개 범위: 전 직원");
+  load();
+});
 
 // 표 안 버튼은 한곳에서 처리합니다(이벤트 위임).
 $("#rows").addEventListener("click", async (e) => {
@@ -180,5 +216,4 @@ $("#deleteAll").onclick = async () => {
   editingId = null;
   load();
 };
-checkToken();
-load();
+checkToken().then((ok) => ok && load());

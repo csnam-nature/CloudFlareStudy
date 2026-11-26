@@ -7,6 +7,8 @@
 //   - WebSocket 연결을 직접 받아 답변을 조각조각 실시간으로 보낼 수 있습니다.
 //
 // 브라우저는 ws(s)://<호스트>/agents/chat-agent/<대화id> 로 연결합니다. (클래스 이름 ChatAgent → 경로 chat-agent)
+// 연결 전에 src/index.ts 가 로그인·대화 주인을 확인하고, 누구인지를 x-chat-user 헤더로 넘겨 줍니다.
+// 그 사람이 볼 수 있는 문서(그룹)만 검색합니다.
 // React 없이 순수 WebSocket 으로 쓰려고, 메시지 형식을 아래처럼 직접 정했습니다.
 //
 //   브라우저 → 서버  { type: "ask", text, docId? }   질문
@@ -21,7 +23,7 @@
 
 import { Agent, type Connection, type ConnectionContext, type WSMessage } from "agents";
 import { type ChatMessage, streamChat } from "./ai";
-import { type Bindings, isMock } from "./auth";
+import { type Bindings, docScope, isAuthError, isMock, loadUser, type User } from "./auth";
 import { type AnswerMode, buildMessages, GENERAL_LABEL, mockAnswer, retrieve, type Source, toMode } from "./rag";
 import { getSettings, webSearchState } from "./settings";
 
@@ -66,9 +68,9 @@ export class ChatAgent extends Agent<Bindings> {
   }
 
   onConnect(connection: Connection, ctx: ConnectionContext) {
-    // Rate Limiting 키로 쓸 IP 를 연결 상태에 기억해 둡니다.
+    // Rate Limiting 키로 쓸 IP 와, src/index.ts 가 확인해 넘겨 준 사용자를 연결 상태에 기억해 둡니다.
     const ip = ctx.request.headers.get("cf-connecting-ip") ?? "local";
-    connection.setState({ ip });
+    connection.setState({ ip, user: parseChatUser(ctx.request.headers.get(CHAT_USER_HEADER)) });
     const rows = this.sql<StoredMessage>`SELECT * FROM messages ORDER BY id DESC LIMIT 50`.reverse();
     const cur = this.current;
     // 생성 중인 답변은 DB 에 아직 빈 내용이므로, 메모리의 현재까지 내용으로 바꿔 보냅니다.
@@ -97,14 +99,22 @@ export class ChatAgent extends Agent<Bindings> {
     if (!question) return this.sendError(connection, "질문을 입력해 주세요.");
     if (this.busy) return this.sendError(connection, "이전 답변을 만드는 중입니다. 잠시 뒤 다시 보내 주세요.");
 
-    // 남용 방지: IP 하나당 60초에 N번 (wrangler.jsonc 의 ratelimits)
-    const ip = (connection.state as { ip?: string } | null)?.ip ?? "local";
-    const { success } = await this.env.CHAT_LIMITER.limit({ key: ip });
+    // 질문할 때마다 사용자를 다시 읽습니다. 연결 중에 역할·그룹이 바뀌거나 사용 중지되어도 바로 반영됩니다.
+    const state = (connection.state ?? {}) as { ip?: string; user?: User };
+    let user = state.user ?? ANONYMOUS_USER;
+    if (user.via === "access" || user.via === "dev") {
+      const fresh = await loadUser(this.env, user.email, user.via);
+      if (isAuthError(fresh)) return this.sendError(connection, fresh.error);
+      user = fresh;
+    }
+
+    // 남용 방지: 한 사람(로그인 전에는 IP 하나)당 60초에 N번 (wrangler.jsonc 의 ratelimits)
+    const { success } = await this.env.CHAT_LIMITER.limit({ key: user.email || state.ip || "local" });
     if (!success) return this.sendError(connection, "질문이 너무 잦습니다. 1분 뒤에 다시 시도해 주세요.");
 
     this.busy = true;
     try {
-      await this.answer(connection, question, msg.docId ? Number(msg.docId) : undefined, toMode(msg.mode), msg.web === true);
+      await this.answer(connection, question, msg.docId ? Number(msg.docId) : undefined, toMode(msg.mode), msg.web === true, docScope(user));
     } catch (err) {
       console.error("답변 실패", err);
       const text = err instanceof Error ? err.message : String(err);
@@ -118,7 +128,14 @@ export class ChatAgent extends Agent<Bindings> {
     }
   }
 
-  private async answer(connection: Connection, question: string, docId: number | undefined, mode: AnswerMode, wantWeb: boolean) {
+  private async answer(
+    connection: Connection,
+    question: string,
+    docId: number | undefined,
+    mode: AnswerMode,
+    wantWeb: boolean,
+    scope: number[] | null,
+  ) {
     // 직전 대화(최근 N턴)를 먼저 읽어 둡니다. "그럼 E-22 는?" 같은 이어지는 질문을 이해시키기 위해서입니다.
     const history = this.sql<StoredMessage>`SELECT * FROM messages ORDER BY id DESC LIMIT ${HISTORY_TURNS * 2}`
       .reverse()
@@ -140,7 +157,7 @@ export class ChatAgent extends Agent<Bindings> {
     // 1) 검색 (일반 질문 모드는 문서 검색을 건너뜀)
     const mock = isMock(this.env);
     const settings = await getSettings(this.env);
-    const sources = mode === "general" ? [] : await retrieve(this.env, settings, question, mock, docId);
+    const sources = mode === "general" ? [] : await retrieve(this.env, settings, question, mock, docId, scope);
     // 웹 검색은 쓸 수 있을 때만. 못 쓰면 이유를 알리고 웹 검색 없이 답합니다.
     let web = false;
     if (wantWeb) {
@@ -175,6 +192,20 @@ export class ChatAgent extends Agent<Bindings> {
   private sendError(connection: Connection, message: string) {
     connection.send(JSON.stringify({ type: "error", message }));
   }
+}
+
+/** src/index.ts 가 에이전트로 넘기는 사용자 정보 헤더 (브라우저가 보낸 같은 이름의 헤더는 index.ts 가 지우고 다시 씀) */
+export const CHAT_USER_HEADER = "x-chat-user";
+const ANONYMOUS_USER: User = { email: "", name: "", role: "employee", groups: [], via: "anonymous" };
+
+function parseChatUser(v: string | null): User {
+  try {
+    const u = JSON.parse(decodeURIComponent(v ?? "")) as User;
+    if (u && typeof u.role === "string" && Array.isArray(u.groups)) return u;
+  } catch {
+    /* 없거나 깨졌으면 익명 */
+  }
+  return ANONYMOUS_USER;
 }
 
 /** 연습 모드의 가짜 답변 (답변 모드별) */
