@@ -34,7 +34,7 @@
     {
       "binding": "DB",
       "database_name": "doc-chatbot-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "7c5f585f-2f8a-4bdd-8f3b-719751a2e7e5",
       "migrations_dir": "migrations"
     }
   ],
