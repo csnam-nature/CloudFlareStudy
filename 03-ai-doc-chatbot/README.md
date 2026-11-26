@@ -17,9 +17,11 @@
 ├── wrangler.jsonc            # Worker 설정 + 모든 바인딩, 연습 모드(env.mock)
 ├── migrations/
 │   ├── 0001_init.sql         # documents, chunks, mock_vectors 테이블
-│   └── 0002_settings.sql     # 관리 화면 설정 값
+│   ├── 0002_settings.sql     # 관리 화면 설정 값
+│   └── 0003_conversations.sql # 대화 목록·폴더 (사이드바)
 ├── public/                   # 정적 화면 (빌드 없음)
 │   ├── index.html · app.js   # 채팅 화면 (순수 WebSocket)
+│   ├── sidebar.js            # 왼쪽 사이드바: 폴더·대화 목록
 │   ├── admin.html · admin.js # 문서 관리 화면 (업로드·목록·열기·이름 수정·다시 색인·삭제·설정)
 │   ├── export.js             # 답변 저장: Markdown · Word(.docx) · PDF(인쇄)
 │   ├── common.js · style.css
@@ -31,6 +33,7 @@
 │   ├── rag.ts                # 검색 + 프롬프트 만들기
 │   ├── agent.ts              # ChatAgent (Agents SDK): 대화 기록, 답변 스트리밍, Rate Limiting
 │   ├── ai.ts                 # Workers AI · AI Gateway · Vectorize 호출, 연습 모드 가짜 구현
+│   ├── conversations.ts      # 대화 목록·폴더 API
 │   ├── settings.ts           # 관리 화면 설정(모델·검색·청크) 저장·API
 │   ├── hwpx.ts               # 한글 HWPX → Markdown
 │   └── auth.ts               # 관리자 토큰, 공용 타입
@@ -69,6 +72,9 @@
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | GET | `/api/me` | 관리자 여부, 연습 모드 여부, 화면 제목, 모델 이름 |
+| GET | `/api/conversations` | 내 폴더·대화 목록 (헤더 `X-Client-Id`) |
+| POST · PATCH · DELETE | `/api/conversations/folders[/:id]` | 폴더 만들기·이름 바꾸기·삭제(`?withConversations=1` 이면 대화도 삭제) |
+| POST · PATCH · DELETE | `/api/conversations[/:id]` | 대화 등록·제목/폴더 바꾸기·삭제(기록도 지움) |
 | GET · PUT · DELETE | `/api/settings` | 설정 읽기 · 일부 바꾸기 · 모두 기본값으로 (관리자) |
 | POST | `/api/settings/test` | 모델 시험. 본문 `{ "model": "@cf/..." }` (관리자) |
 | GET | `/api/documents` | 문서 목록 + 전체 청크 수 |
@@ -78,7 +84,7 @@
 | POST | `/api/documents/:id/reindex` | 다시 색인 (관리자) |
 | DELETE | `/api/documents/:id` | 삭제: R2 원본, D1 행·청크, Vectorize 벡터 모두 (관리자) |
 | DELETE | `/api/documents?confirm=all` | 모두 삭제. 관리 화면의 "모두 삭제" 버튼은 `모두 삭제` 라고 입력해야 실행됩니다 (관리자) |
-| WS | `/agents/chat-agent/:세션id` | 채팅. 메시지 형식은 `src/agent.ts` 참고 |
+| WS | `/agents/chat-agent/:대화id` | 채팅. 메시지 형식은 `src/agent.ts` 참고 |
 
 관리자 API 는 헤더 `Authorization: Bearer <ADMIN_TOKEN>` 이 필요합니다. 질문과 원본 열기는 누구나 할 수 있습니다.
 사내에서만 쓰게 하려면 [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)(Zero Trust, 50명까지 무료)를 Worker 앞에 두세요.
@@ -135,11 +141,23 @@ npm run dev                              # AI·Vectorize 는 원격(실제 계�
 
 ```powershell
 npx wrangler secret put ADMIN_TOKEN      # 배포용 관리자 토큰
-npm run db:migrate:remote                # 새 마이그레이션(예: 0002_settings)이 생기면 배포 전에 꼭 다시 실행
+npm run db:migrate:remote                # 새 마이그레이션(예: 0002_settings, 0003_conversations)이 생기면 배포 전에 꼭 다시 실행
 npm run deploy                           # https://doc-chatbot.<계정>.workers.dev
 ```
 
 번들 크기는 약 2.4MB(gzip 460KB)로 무료 플랜 Worker 크기 한도(압축 3MB) 안입니다.
+
+## 대화 목록과 폴더 (왼쪽 사이드바)
+
+ChatGPT·Claude 대화창처럼 왼쪽에 대화 목록이 있습니다.
+
+- **＋ 새 대화**: 빈 대화를 시작합니다. 첫 질문을 보내면 목록에 생기고, 제목은 첫 질문입니다.
+- **＋ 폴더**: 폴더를 만듭니다. 폴더 줄의 **＋** 를 누르면 그 폴더 안에서 새 대화를 시작합니다.
+- 대화를 누르면 그 대화의 기록이 열리고, 이어서 질문할 수 있습니다(대화마다 ChatAgent 인스턴스가 하나씩).
+- 대화의 **⋯** 메뉴: 이름 바꾸기 · 폴더로 옮기기 · 삭제. 대화를 폴더로 **끌어다 놓아도** 옮겨집니다.
+- 폴더의 **⋯** 메뉴: 이름 바꾸기 · 폴더만 삭제(대화는 "폴더 없음"으로) · 폴더와 대화 모두 삭제.
+- 목록은 D1(`folders`, `conversations`)에 저장되지만, 로그인이 없어서 **브라우저마다 따로**입니다(localStorage 의 무작위 id 를 `X-Client-Id` 로 보냄). 다른 PC·브라우저에서는 보이지 않습니다. 사람별로 묶으려면 Cloudflare Access 를 앞에 두고 로그인 이메일을 owner 로 쓰도록 바꾸면 됩니다.
+- 폴더 기능 전에 쓰던 대화가 있으면 처음 열 때 "이전 대화"로 목록에 들어갑니다.
 
 ## 관리 화면의 "설정"
 

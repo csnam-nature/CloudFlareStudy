@@ -172,3 +172,49 @@ table.docs .actions a { border: 1px solid var(--line); border-radius: 8px; text-
 .msg.bot .bubble table { border-collapse: collapse; margin: 6px 0; font-size: 13px; display: block; overflow-x: auto; }
 .msg.bot .bubble th, .msg.bot .bubble td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
 .msg.bot .bubble th { background: #f6f7f9; }
+
+/* ── 대화 목록 사이드바 ── */
+.layout { flex: 1; display: flex; min-height: 0; }
+.chatmain { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#sidebar {
+  width: 270px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px;
+  background: #fbfbfc; border-right: 1px solid var(--line); padding: 10px; overflow: hidden;
+}
+#sidebar.hidden { display: none; }
+.side-actions { display: flex; gap: 6px; }
+.side-actions .primary { flex: 1; }
+#convSearch { width: 100%; }
+#tree { flex: 1; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.side-empty { padding: 6px 8px; font-size: 12px; }
+.side-foot { font-size: 11px; line-height: 1.4; }
+.folder { margin-bottom: 6px; border-radius: 8px; }
+.folder.drop-over { background: #fff1e5; outline: 2px dashed var(--accent); }
+.folder-head { display: flex; align-items: center; gap: 4px; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.folder-head:hover { background: #eef1f4; }
+.folder-head.plain { cursor: default; color: var(--muted); font-weight: 600; }
+.folder-head.plain:hover { background: none; }
+.folder-head .caret { width: 12px; color: var(--muted); }
+.folder-head .folder-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-head .count { font-size: 11px; color: var(--muted); font-weight: 400; }
+.folder:not(.loose) .folder-body { margin-left: 14px; }
+.conv { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.conv:hover { background: #eef1f4; }
+.conv.active { background: #ffe9d6; }
+.conv.pending { font-style: italic; color: var(--muted); }
+.conv-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.more { border: 0; background: none; padding: 0 5px; color: var(--muted); visibility: hidden; font-size: 15px; line-height: 1; }
+.conv:hover .more, .conv.active .more, .folder-head:hover .more { visibility: visible; }
+.side-menu {
+  position: fixed; z-index: 20; min-width: 200px; max-height: 70vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.12); padding: 4px;
+}
+.side-menu button { display: block; width: 100%; text-align: left; border: 0; border-radius: 6px; padding: 6px 10px; font-size: 14px; }
+.side-menu button:hover:not(:disabled) { background: #eef1f4; }
+.side-menu button.danger { color: var(--err); }
+.side-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.side-menu .menu-label { font-size: 12px; color: var(--muted); padding: 4px 10px 2px; }
+.folder-note { color: var(--accent-dark); }
+#sideToggle { padding: 4px 9px; }
+@media (max-width: 800px) {
+  #sidebar { position: fixed; z-index: 15; top: 0; bottom: 0; left: 0; box-shadow: 4px 0 20px rgba(0,0,0,.15); }
+}

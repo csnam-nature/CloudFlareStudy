@@ -6,7 +6,7 @@
 // samples/charger-error-codes.md 를 올려 색인을 기다린 뒤, WebSocket 으로 질문 → 근거·답변 확인 →
 // 이름 수정 → 다시 색인 → 삭제까지 확인하고, 만든 데이터는 마지막에 모두 지웁니다.
 // Node.js 22 이상(내장 WebSocket)이 필요합니다.
-// 한 번에 질문을 7번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 1번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
+// 한 번에 질문을 8번 보내므로, Rate Limiting(IP당 60초 10번) 때문에 1분 안에 1번 넘게 연달아 돌리면 채팅 항목이 실패합니다.
 // "모두 삭제"도 확인하므로 연습 모드 로컬 DB 의 문서가 모두 지워집니다.
 
 import { readFile } from "node:fs/promises";
@@ -263,6 +263,48 @@ await new Promise((resolve) => {
     else check("새 대화로 기록 비우기", m.messages.length === 0), ws.close(), resolve();
   };
 });
+
+// 10. 대화 목록·폴더 (사이드바 API)
+{
+  const client = crypto.randomUUID();
+  const other = crypto.randomUUID();
+  const capi = async (path, method = "GET", body, who = client) => {
+    const res = await fetch(`${BASE}/api/conversations${path}`, {
+      method,
+      headers: { "x-client-id": who, ...(body ? { "content-type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { status: res.status, data: await res.json().catch(() => ({})) };
+  };
+  check("X-Client-Id 없으면 400", (await fetch(`${BASE}/api/conversations`)).status === 400);
+  const folder = (await capi("/folders", "POST", { name: "충전기 A/S" })).data;
+  check("폴더 만들기", folder.id > 0 && folder.name === "충전기 A/S");
+  const convId = crypto.randomUUID();
+  let r = await capi("", "POST", { id: convId, folderId: folder.id, title: "E-21 오류는 무엇인가요?" });
+  check("폴더 안에 대화 만들기", r.status === 201 && r.data.folderId === folder.id);
+  // 그 대화(에이전트)에 질문하면 목록 시각이 갱신되고 기록이 남음
+  const before = r.data.updatedAt;
+  await new Promise((res) => setTimeout(res, 1100));
+  const ac = await ask(convId, "E-21 오류는 무엇인가요?");
+  check("대화 id 로 질문·답변", ac.done);
+  let list = (await capi("")).data;
+  const c1 = list.conversations.find((c) => c.id === convId);
+  check("목록에 폴더·대화가 보이고 시각 갱신", list.folders.length === 1 && c1?.folderId === folder.id && c1.updatedAt > before);
+  check("다른 브라우저 id 에는 안 보임", (await capi("", "GET", undefined, other)).data.conversations.length === 0);
+  check("남의 대화는 못 바꿈", (await capi(`/${convId}`, "PATCH", { title: "x" }, other)).status === 404);
+  r = await capi(`/${convId}`, "PATCH", { title: "E-21 정리", folderId: null });
+  list = (await capi("")).data;
+  check("이름 바꾸기 + 폴더 밖으로 옮기기", r.status === 200 && list.conversations[0].title === "E-21 정리" && list.conversations[0].folderId === null);
+  await capi(`/${convId}`, "PATCH", { folderId: folder.id });
+  r = await capi(`/folders/${folder.id}`, "PATCH", { name: "A/S 기록" });
+  check("폴더 이름 바꾸기", r.status === 200);
+  r = await capi(`/folders/${folder.id}`, "DELETE");
+  list = (await capi("")).data;
+  check("폴더만 삭제하면 대화는 폴더 없음으로", r.status === 200 && list.folders.length === 0 && list.conversations[0].folderId === null);
+  r = await capi(`/${convId}`, "DELETE");
+  const h2 = await history(convId);
+  check("대화 삭제: 목록과 기록 모두 지움", r.status === 200 && (await capi("")).data.conversations.length === 0 && h2.length === 0, `기록 ${h2.length}개`);
+}
 
 console.log(failed ? `\n${failed}개 실패` : "\n모두 통과");
 process.exit(failed ? 1 : 0);
