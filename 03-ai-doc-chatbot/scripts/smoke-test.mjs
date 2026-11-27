@@ -177,6 +177,9 @@ check("답변 스트리밍 완료", a1.done && a1.answer.length > 0, a1.error ??
 const a2 = await ask(session, "충전 시작 절차", doc.id);
 check("문서를 골라 질문(docId 필터)", a2.done && a2.sources?.every((s) => s.docId === doc.id));
 check("두 번째 연결엔 이전 대화 기록(질문+답변 2개)", a2.history?.length === 2, `${a2.history?.length}개`);
+// 연습 모드는 "순서도"를 물으면 번호 목록을 ```mermaid 블록으로 덧붙입니다(화면 그리기 확인용, 진짜 모드에서는 AI 가 판단).
+const fl = await ask(`smoke-flow-${Date.now()}`, "충전 시작 절차 순서도", doc.id);
+check("순서도 질문 → 답변에 mermaid 블록", fl.done && /```mermaid\nflowchart TD\n[\s\S]*-->[\s\S]*```/.test(fl.answer));
 const h = await history(session);
 check("기록에 근거도 저장됨", h.length === 4 && h[1].sources.length > 0);
 
@@ -329,6 +332,7 @@ await new Promise((resolve) => {
   check("/api/me 에 웹 검색 가능 여부", me.webSearch && me.webSearch.available === false && !!me.webSearch.reason);
   const st = await (await fetch(`${BASE}/api/settings`, { headers: auth })).json();
   check("설정 API 에 기본 프롬프트·모드 규칙", st.defaultSystemPrompt?.includes("네이처텍") && !!st.modeRules?.mixed && st.settings.allowWebSearch === true);
+  check("설정 API 에 그래프 허용·그래프 규칙", st.settings.allowCharts === true && st.chartRule?.includes("```chart") && st.chartRule?.includes("```mermaid"));
 }
 
 // 12. 그룹별 문서 공개 범위 (관리자 토큰 방식: 토큰 없는 사람 = 익명 직원 = 전 직원 문서만)

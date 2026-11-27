@@ -6,14 +6,17 @@
 //          제목·문단·목록·표·굵게를 Word 서식으로 옮깁니다.
 //   PDF  : 한글 글꼴을 PDF 에 넣으려면 큰 글꼴 파일이 필요해서, 대신 인쇄용 화면을 만들어 브라우저 인쇄 창을 엽니다.
 //          인쇄 창에서 대상(프린터)을 "PDF로 저장"으로 고르면 됩니다.
+//   그래프(```chart)·도식(```mermaid) 블록은 Word·PDF 에서는 PNG 그림으로 넣고, MD 에서는 블록 글 그대로 둡니다(charts.js).
 
 import { esc } from "./common.js";
+import { attr, chartImage, mermaidImage, parseChart } from "./charts.js";
 
 // ── 공통: 답변 Markdown → 블록 ─────────────────────────────
 
 /**
  * 답변에 쓰이는 정도의 Markdown 을 블록으로 나눕니다.
  * { type: "h", level, text } | { type: "p", text } | { type: "ul"|"ol", items } | { type: "table", rows } | { type: "hr" }
+ * | { type: "code", lang, code, open }  (``` 로 둘러싼 블록. open = 아직 닫는 ``` 가 오지 않음(답변을 받는 중))
  */
 export function parseBlocks(md) {
   const lines = String(md ?? "").replace(/\r\n?/g, "\n").split("\n");
@@ -28,6 +31,17 @@ export function parseBlocks(md) {
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    // ```언어 … ``` 블록 (그래프·도식·코드)
+    const fence = line.match(/^\s*(`{3,})\s*([\w-]*)\s*$/);
+    if (fence) {
+      flushPara(), flushList();
+      const body = [];
+      let j = i + 1;
+      while (j < lines.length && !new RegExp(`^\\s*${fence[1]}\\s*$`).test(lines[j])) body.push(lines[j++]);
+      blocks.push({ type: "code", lang: fence[2].toLowerCase(), code: body.join("\n"), open: j >= lines.length });
+      i = j;
+      continue;
+    }
     // 표: | a | b | 다음 줄이 | --- | --- |  (줄 끝에 붙은 근거 번호 "| ... | [1]" 도 표의 행으로 봄)
     if (TABLE_ROW.test(line) && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1] ?? "")) {
       flushPara(), flushList();
@@ -144,17 +158,21 @@ function download(blob, name) {
 
 // ── 저장 (밖에서 부르는 함수) ─────────────────────────────
 
-export function exportItems(format, appTitle, items) {
+export async function exportItems(format, appTitle, items) {
   const { title, md } = buildMarkdown(appTitle, items);
   if (format === "md") return download(new Blob([md], { type: "text/markdown;charset=utf-8" }), fileName(title, "md"));
-  if (format === "docx") return download(makeDocx(title, parseBlocks(md)), fileName(title, "docx"));
-  if (format === "pdf") return printPdf(fileName(title, "pdf").replace(/\.pdf$/, ""), parseBlocks(md));
+  if (format === "docx") return download(makeDocx(title, await prepareImages(parseBlocks(md))), fileName(title, "docx"));
+  if (format === "pdf") return printPdf(fileName(title, "pdf").replace(/\.pdf$/, ""), await prepareImages(parseBlocks(md)));
 }
 
 // ── PDF: 인쇄용 화면 ──────────────────────────────────────
 
-/** 블록 → HTML (인쇄용) */
-export function blocksToHtml(blocks) {
+/**
+ * 블록 → HTML (화면·인쇄 공용)
+ * live = 답변을 받는 중: 그래프·도식은 다 받은 뒤에 그리므로 자리 표시만 합니다.
+ * 그래프·도식 블록은 화면에서는 .viz 자리(charts.js renderVisuals 가 그림), 저장할 때는 미리 만든 그림(b.image)을 넣습니다.
+ */
+export function blocksToHtml(blocks, { live = false } = {}) {
   const inline = (t) =>
     inlineRuns(t)
       .map((r) =>
@@ -172,6 +190,7 @@ export function blocksToHtml(blocks) {
       if (b.type === "h") return `<h${b.level}>${inline(b.text)}</h${b.level}>`;
       if (b.type === "p") return `<p>${inline(b.text)}</p>`;
       if (b.type === "hr") return "<hr />";
+      if (b.type === "code") return codeToHtml(b, live);
       if (b.type === "ul" || b.type === "ol") return `<${b.type}>${b.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${b.type}>`;
       if (b.type === "table") {
         const [head, ...rows] = b.rows;
@@ -184,6 +203,42 @@ export function blocksToHtml(blocks) {
     .join("\n");
 }
 
+const VISUAL = { chart: "📊 그래프를", mermaid: "🔀 도식을" };
+
+function codeToHtml(b, live) {
+  const pre = `<pre class="code"><code>${esc(b.code)}</code></pre>`;
+  if (!VISUAL[b.lang]) return pre;
+  if (b.image) return `<figure class="viz-img"><img src="${b.image.dataUrl}" alt="${esc(b.image.alt)}" style="max-width:100%;width:${b.image.width}px" /></figure>`;
+  if (b.failed) return pre;
+  if (live) return `<div class="viz-wait">${VISUAL[b.lang]} 그리는 중… (답변이 끝나면 나타납니다)</div>`;
+  if (b.open) return pre; // 닫는 ``` 없이 끝난 블록(답변이 잘림)은 글 그대로
+  if (b.lang === "mermaid") return `<div class="viz viz-mermaid" data-code="${attr(b.code)}"></div>`;
+  try {
+    return `<div class="viz viz-chart" data-spec="${attr(JSON.stringify(parseChart(b.code)))}" data-raw="${attr(b.code)}"></div>`;
+  } catch (e) {
+    return `<p class="viz-error">그래프를 그리지 못해 원래 글을 보여 드립니다: ${esc(e.message)}</p>${pre}`;
+  }
+}
+
+/** 저장 전에 그래프·도식 블록마다 PNG 그림을 만들어 b.image 에 넣습니다. 실패한 블록은 글 그대로 둡니다. */
+async function prepareImages(blocks) {
+  for (const b of blocks) {
+    if (b.type !== "code" || !VISUAL[b.lang] || b.open) continue;
+    try {
+      if (b.lang === "chart") {
+        const spec = parseChart(b.code);
+        b.image = { ...(await chartImage(spec)), alt: spec.title || "그래프" };
+      } else {
+        b.image = { ...(await mermaidImage(b.code)), alt: "도식" };
+      }
+    } catch (e) {
+      console.warn("저장용 그림을 만들지 못했습니다:", e);
+      b.failed = true; // 저장 파일에는 원래 글을 그대로 넣습니다(빈 그래프 자리가 남지 않게)
+    }
+  }
+  return blocks;
+}
+
 const PRINT_CSS = `
   @page { size: A4; margin: 18mm 16mm; }
   body { font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; font-size: 11pt; line-height: 1.6; color: #111; }
@@ -194,6 +249,9 @@ const PRINT_CSS = `
   th { background: #f2f2f2; }
   tr, li { break-inside: avoid; }
   code { font-family: Consolas, monospace; background: #f4f4f4; padding: 0 2px; }
+  pre.code { background: #f4f4f4; padding: 6pt; white-space: pre-wrap; font-size: 9pt; }
+  figure.viz-img { margin: 8pt 0; text-align: center; break-inside: avoid; }
+  .viz-error { color: #b42318; font-size: 9pt; }
 `;
 
 /** 숨긴 iframe 에 인쇄용 문서를 넣고 인쇄 창을 엽니다. (새 창이 아니라 팝업 차단에 걸리지 않음) */
@@ -208,7 +266,9 @@ function printPdf(title, blocks) {
   // 인쇄 창의 기본 PDF 파일 이름은 부모 창 제목을 따르는 브라우저가 있어 잠시 바꿔 둡니다.
   const oldTitle = document.title;
   document.title = title;
-  setTimeout(() => {
+  // 그래프 그림이 다 읽힌 뒤에 인쇄 창을 엽니다.
+  setTimeout(async () => {
+    await Promise.all([...doc.images].map((im) => im.decode().catch(() => {})));
     frame.contentWindow.focus();
     frame.contentWindow.print();
     document.title = oldTitle;
@@ -237,9 +297,35 @@ function docxRuns(text, { bold = false, size } = {}) {
 
 const para = (inner, style) => `<w:p>${style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : ""}${inner}</w:p>`;
 
-function docxBody(blocks) {
+// Word 본문 폭(A4 - 여백) = 9752 twip = 6,192,520 EMU. 그림은 이 폭 안에 맞춥니다(1px = 9525 EMU).
+const MAX_CX = 6192520;
+const MAX_CY = 8000000;
+
+/** 그림 문단 (media 에 PNG 를 넣고 관계 id 로 가리킴) */
+function docxImage(b, media) {
+  const n = media.length + 1;
+  const bin = atob(b.image.dataUrl.split(",")[1]);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  media.push({ name: `image${n}.png`, rid: `rIdImg${n}`, bytes });
+  let cx = b.image.width * 9525;
+  let cy = b.image.height * 9525;
+  const k = Math.min(1, MAX_CX / cx, MAX_CY / cy);
+  cx = Math.round(cx * k);
+  cy = Math.round(cy * k);
+  return `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${n}" name="${xml(b.image.alt)} ${n}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${n}" name="image${n}.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdImg${n}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+}
+
+/** 코드 블록(그림을 못 만든 그래프 포함): 고정폭 글꼴 문단들 */
+const docxCode = (code) =>
+  code
+    .split("\n")
+    .map((l) => `<w:p><w:pPr><w:spacing w:after="0"/><w:shd w:val="clear" w:fill="F4F4F4"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve">${xml(l)}</w:t></w:r></w:p>`)
+    .join("") + para("");
+
+function docxBody(blocks, media) {
   return blocks
     .map((b) => {
+      if (b.type === "code") return b.image ? docxImage(b, media) : docxCode(b.code);
       if (b.type === "h") return para(docxRuns(b.text), b.level === 1 ? "Title" : `Heading${Math.min(b.level - 1, 3)}`);
       if (b.type === "p") return para(docxRuns(b.text));
       if (b.type === "hr") return '<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="999999"/></w:pBdr></w:pPr></w:p>';
@@ -264,6 +350,9 @@ function docxBody(blocks) {
 }
 
 const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+// 그림(drawing)에 쓰는 이름공간
+const DRAW_NS =
+  'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
 
 const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles ${W_NS}>
@@ -285,11 +374,14 @@ const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 
 export function makeDocx(title, blocks) {
   const enc = new TextEncoder();
+  const media = [];
+  const body = docxBody(blocks, media); // 그림이 있으면 media 에 PNG 가 쌓임
   const files = {
     "[Content_Types].xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
@@ -306,13 +398,16 @@ export function makeDocx(title, blocks) {
 </cp:coreProperties>`,
     "word/_rels/document.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${media
+    .map((m) => `\n  <Relationship Id="${m.rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${m.name}"/>`)
+    .join("")}
 </Relationships>`,
     "word/styles.xml": STYLES,
     "word/document.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document ${W_NS}><w:body>${docxBody(blocks)}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1077" w:bottom="1134" w:left="1077" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr></w:body></w:document>`,
+<w:document ${W_NS} ${DRAW_NS}><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1077" w:bottom="1134" w:left="1077" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr></w:body></w:document>`,
   };
-  return new Blob([makeZip(Object.entries(files).map(([name, text]) => [name, enc.encode(text)]))], {
+  const entries = [...Object.entries(files).map(([name, text]) => [name, enc.encode(text)]), ...media.map((m) => [`word/media/${m.name}`, m.bytes])];
+  return new Blob([makeZip(entries)], {
     type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   });
 }

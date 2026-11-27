@@ -172,7 +172,7 @@ export class ChatAgent extends Agent<Bindings> {
     // 2) 생성 (스트리밍)
     let content = "";
     try {
-      const messages = buildMessages(question, sources, history, { systemPrompt: settings.systemPrompt, mode, web });
+      const messages = buildMessages(question, sources, history, { systemPrompt: settings.systemPrompt, mode, web, charts: settings.allowCharts });
       for await (const piece of streamChat(this.env, settings, messages, mockForMode(mode, question, sources), web)) {
         content += piece;
         this.current.content = content;

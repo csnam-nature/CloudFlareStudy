@@ -5,7 +5,7 @@
 // 저장한 값은 다음 요청부터 바로 쓰입니다(색인 관련 값은 다음에 올리거나 "다시 색인"하는 문서부터).
 
 import { Hono } from "hono";
-import { MODE_RULES, SYSTEM_PROMPT } from "./rag";
+import { CHART_RULE, MODE_RULES, SYSTEM_PROMPT } from "./rag";
 import { explainExternalError, keyStatus, providerOf, testExternal } from "./providers";
 import { type AppEnv, type Bindings, isMock, nowSec, requireAdmin } from "./auth";
 
@@ -23,6 +23,7 @@ export type Settings = {
   maxChunksPerDoc: number; // 문서 하나의 조각 수 한도
   systemPrompt: string; // 비우면 기본 규칙(src/rag.ts)
   allowWebSearch: boolean; // 질문창의 🌐 웹 검색 허용 (Claude·OpenAI 모델만, 검색마다 요금)
+  allowCharts: boolean; // 답변에 그래프(```chart)·도식(```mermaid) 허용 → 프롬프트에 그래프 규칙(CHART_RULE)을 덧붙임
 };
 
 /** 고를 수 있는 모델 목록 (2026-11 기준 무료 플랜에서 쓸 수 있고 지원 종료 예정이 아닌 모델). 목록에 없는 모델은 직접 입력할 수 있습니다. */
@@ -79,6 +80,7 @@ export function defaults(env: Bindings): Settings {
     maxChunksPerDoc: Number(env.MAX_CHUNKS_PER_DOC) || 400,
     systemPrompt: "",
     allowWebSearch: true,
+    allowCharts: true,
   };
 }
 
@@ -90,7 +92,7 @@ function clean(key: keyof Settings, v: unknown): Settings[keyof Settings] {
     if (!Number.isFinite(n) || n < range[0] || n > range[1]) throw new Error(`${key} 는 ${range[0]} ~ ${range[1]} 사이 숫자여야 합니다.`);
     return ["topK", "maxTokens", "chunkSize", "chunkOverlap", "maxChunksPerDoc"].includes(key) ? Math.round(n) : n;
   }
-  if (key === "thinking" || key === "allowWebSearch") return v === true || v === "true";
+  if (key === "thinking" || key === "allowWebSearch" || key === "allowCharts") return v === true || v === "true";
   const s = String(v ?? "").trim();
   if (key === "chatModel" && /^(openai|anthropic)\/[\w.:-]+$/.test(s)) return s; // 외부 AI (src/providers.ts)
   if (key === "chatModel" || key === "ocrModel") {
@@ -158,6 +160,7 @@ settingsApi.get("/", requireAdmin, async (c) =>
     external: keyStatus(c.env), // 외부 AI 키가 들어 있는지(값은 보내지 않음)
     defaultSystemPrompt: SYSTEM_PROMPT, // "기본값 불러오기" 버튼용
     modeRules: MODE_RULES, // 답변 모드별로 자동으로 덧붙는 규칙(읽기 전용 안내)
+    chartRule: CHART_RULE, // 그래프 허용 시 덧붙는 규칙(읽기 전용 안내)
   }),
 );
 
